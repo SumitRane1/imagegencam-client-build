@@ -43,12 +43,14 @@ you use ChatGPT, you already have one.
 ### Parts
 
 - Raspberry Pi Zero 2 W with headers
-- Pimoroni Display HAT Mini
+- Pimoroni Display HAT Mini (Pimorini PIM589)
 - Spy Camera for Raspberry Pi Zero (Adafruit #3508, or generic equivalent)
 - PiSugar 3
-- MicroSD card
+- 16GB MicroSD card
 - MicroSD card reader
 - [3D Printed Camera Case](3d%20model)
+
+While our 3D printed enclosure is designed for these parts, you can easily modify the software with Codex to work with other cameras, screens, or boards.
 
 > **Note:** If you want your camera to work outside your home, we highly
 > recommend switching it from your home Wi-Fi to your phone's mobile hotspot at
