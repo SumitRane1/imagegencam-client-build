@@ -939,7 +939,7 @@ class ImageGenCamController:
     def _render_to_display(self, image: Image.Image, *, decorate_battery: bool = True) -> None:
         self.current_display_image = image
         self._record_display_frame(time.monotonic())
-        composed = self.decorate_with_battery(image) if decorate_battery else image
+        composed = self._decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
         r, g, b = composed.convert("RGB").split()
         composed_bgr = Image.merge("RGB", (b, g, r))
