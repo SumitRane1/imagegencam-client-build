@@ -432,9 +432,9 @@ class ImageGenCamController:
                     char += sys.stdin.read(2)
                 action = key_action_map.get(char)
                 if action == "shutter":
-                    self.queue_shutter_event("shutter")
+                    self._queue_shutter_event("shutter")
                 elif action:
-                    self.queue_ui_event(action)
+                    self._queue_ui_event(action)
         except Exception:
             logger.exception("Keyboard input loop failed")
         finally:
