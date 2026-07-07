@@ -1134,7 +1134,7 @@ class ImageGenCamController:
         except OSError:
             return None
 
-    def configure_pisugar_shortcut_button(self) -> bool:
+    def _configure_pisugar_shortcut_button(self) -> bool:
         return False
 
     def _maybe_configure_pisugar_button(self) -> None:
