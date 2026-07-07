@@ -266,10 +266,7 @@ class ImageGenCamController:
         self.battery_readings: list[int] = []
         self.battery_sample_size = 25
         self.pisugar_battery_bus = None
-        self.pisugar_power_button_shutter_enabled = (
-            os.environ.get("PISUGAR_POWER_BUTTON_SHUTTER", "1").strip().lower()
-            not in {"0", "false", "no", "off"}
-        )
+        self.pisugar_power_button_shutter_enabled = False
         self.pisugar_power_button_last_state = False
         self.pisugar_power_button_pressed_at: float | None = None
         self.pisugar_power_button_last_poll_at = 0.0
@@ -327,14 +324,8 @@ class ImageGenCamController:
                 continue
 
     def _setup_pisugar_battery_bus(self) -> None:
-        try:
-            import smbus  # type: ignore
-
-            self.pisugar_battery_bus = smbus.SMBus(1)
-            self._initialize_pisugar_power_button_state()
-        except Exception:
-            self.pisugar_battery_bus = None
-            self.pisugar_power_button_available = False
+        self.pisugar_battery_bus = None
+        self.pisugar_power_button_available = False
 
     def _read_pisugar_power_button_pressed(self) -> bool | None:
         """Return the raw PiSugar 3 power-button bit, if the I2C bus is available."""
@@ -355,15 +346,26 @@ class ImageGenCamController:
         self.pisugar_power_button_available = True
 
     def _setup_display(self) -> None:
-        import displayhatmini
+        import board
+        import busio
+        import digitalio
+        from adafruit_rgb_display import ili9341
 
-        self.displayhatmini = displayhatmini
+        cs_pin = digitalio.DigitalInOut(board.CE0)
+        dc_pin = digitalio.DigitalInOut(board.D24)
+        reset_pin = digitalio.DigitalInOut(board.D25)
+        spi = busio.SPI(clock=board.SCK, MOSI=board.MOSI, MISO=board.MISO)
+
+        self.display = ili9341.ILI9341(
+            spi,
+            cs=cs_pin,
+            dc=dc_pin,
+            rst=reset_pin,
+            baudrate=24000000,
+            width=WIDTH,
+            height=HEIGHT,
+        )
         self.buffer = Image.new("RGB", (WIDTH, HEIGHT))
-        self.display = displayhatmini.DisplayHATMini(self.buffer, backlight_pwm=True)
-        if hasattr(self.display, "st7789") and hasattr(self.display.st7789, "_rotation"):
-            self.display.st7789._rotation = self.display_rotation
-        self.display.set_backlight(1.0)
-        self.display.set_led(0.0, 0.0, 0.0)
 
     def _setup_camera(self) -> None:
         from picamera2 import Picamera2
@@ -400,29 +402,43 @@ class ImageGenCamController:
                 return
 
     def _setup_buttons(self) -> None:
-        self.button_lookup = {
-            self.displayhatmini.DisplayHATMini.BUTTON_A: "ui_down",
-            self.displayhatmini.DisplayHATMini.BUTTON_B: "ui_up",
-            self.displayhatmini.DisplayHATMini.BUTTON_X: "ui_album",
-            self.displayhatmini.DisplayHATMini.BUTTON_Y: "ui_prompt",
-        }
-        self.button_pins = tuple(self.button_lookup.keys())
-        self.button_last_states = {
-            pin: self.display.read_button(pin) for pin in self.button_pins
+        self.use_button_polling = False
+        self.button_pins = ()
+        self.button_last_states = {}
+        self.keyboard_thread = Thread(target=self.keyboard_input_loop, daemon=True)
+        self.keyboard_thread.start()
+
+    def keyboard_input_loop(self) -> None:
+        import sys
+        import termios
+        import tty
+
+        key_action_map = {
+            "\x1b[A": "ui_up",
+            "\x1b[B": "ui_down",
+            "\x1b[C": "ui_prompt",
+            "\x1b[D": "ui_album",
+            "\r": "shutter",
+            "\n": "shutter",
         }
 
-        def callback(pin) -> None:
-            if not self.display.read_button(pin):
-                return
-            action = self.button_lookup.get(pin)
-            if action:
-                self._queue_ui_event(action)
-
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
         try:
-            self.display.on_button_pressed(callback)
-            self.use_button_polling = False
-        except RuntimeError:
-            self.use_button_polling = True
+            tty.setcbreak(fd)
+            while self.running:
+                char = sys.stdin.read(1)
+                if char == "\x1b":
+                    char += sys.stdin.read(2)
+                action = key_action_map.get(char)
+                if action == "shutter":
+                    self.queue_shutter_event("shutter")
+                elif action:
+                    self.queue_ui_event(action)
+        except Exception:
+            logger.exception("Keyboard input loop failed")
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def _queue_ui_event(self, action: str) -> None:
         now = time.monotonic()
@@ -922,12 +938,13 @@ class ImageGenCamController:
 
     def _render_to_display(self, image: Image.Image, *, decorate_battery: bool = True) -> None:
         self.current_display_image = image
-        self._record_display_frame(time.monotonic())
-        composed = self._decorate_with_battery(image) if decorate_battery else image
+        self.record_display_frame(time.monotonic())
+        composed = self.decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
+        r, g, b = composed.convert("RGB").split()
+        composed_bgr = Image.merge("RGB", (b, g, r))
         with self.display_lock:
-            self.buffer.paste(composed)
-            self.display.display()
+            self.display.image(composed_bgr)
 
     def _update_fps_ema(self, previous: float, delta: float) -> float:
         if delta <= 0:
@@ -996,9 +1013,7 @@ class ImageGenCamController:
         )
 
     def _set_led(self, red: float, green: float, blue: float) -> None:
-        red = green = blue = 0.0
-        with self.display_lock:
-            self.display.set_led(red, green, blue)
+        return
 
     def _load_font(
         self,
@@ -1119,38 +1134,8 @@ class ImageGenCamController:
         except OSError:
             return None
 
-    def _configure_pisugar_shortcut_button(self) -> bool:
-        script_path = self.project_root / "scripts" / "pisugar_trigger_shutter.sh"
-        if not script_path.exists():
-            logger.warning("PiSugar shortcut hook missing: %s", script_path)
-            return False
-
-        commands = [
-            "set_button_enable long false",
-        ]
-        if self.magic_mode_enabled:
-            commands.extend(
-                (
-                    f"set_button_shell single {script_path} magic_shutter",
-                    "set_button_enable single true",
-                    "set_button_enable double false",
-                )
-            )
-        else:
-            commands.extend(
-                (
-                    "set_button_enable single false",
-                    "set_button_enable double false",
-                )
-            )
-        for command in commands:
-            response = self._pisugar_command(command)
-            if response and "done" in response.lower():
-                continue
-            if response is not None:
-                logger.warning("PiSugar command %s -> %s", command, response)
-            return False
-        return True
+    def configure_pisugar_shortcut_button(self) -> bool:
+        return False
 
     def _maybe_configure_pisugar_button(self) -> None:
         if self.pisugar_shortcut_button_configured:
