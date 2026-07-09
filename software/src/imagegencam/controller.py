@@ -1272,8 +1272,8 @@ class ImageGenCamController:
         ready = status.get("ready_images", "0")
 
         cache_key = (
-            self._battery_percent,
-            self._battery_charging,
+            self.battery_percent,
+            self.battery_charging,
             wifi_ssid,
             style_title,
             pending,
