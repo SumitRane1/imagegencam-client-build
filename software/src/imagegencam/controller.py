@@ -877,7 +877,7 @@ class ImageGenCamController:
 
     def _build_display_preview_frame(self, image: Image.Image) -> Image.Image:
         viewfinder_image = self._fit_camera_for_display(image)
-        if self._preview_calibration_lut is not None:
+        if self.preview_calibration_lut is not None:
             viewfinder_image = self._apply_preview_calibration(viewfinder_image)
 
         frame = self._get_bezel_frame()
