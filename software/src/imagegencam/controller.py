@@ -237,6 +237,8 @@ class ImageGenCamController:
         self.preview_chrome_cache: Image.Image | None = None
         self.battery_overlay_cache_key: tuple[int | None, bool] | None = None
         self.battery_overlay_cache: Image.Image | None = None
+        self.wifi_connected_cache: bool = False
+        self.wifi_last_checked_at: float = 0.0
         self.ready_unseen_count = 0
         self.wifi_manager = NetworkManagerWifi()
         self.wifi_networks: list[WifiNetwork] = []
@@ -428,6 +430,7 @@ class ImageGenCamController:
             "\x1b[D": "ui_album",
             "\r": "shutter",
             "\n": "shutter",
+            " ": "shutter",
         }
 
         fd = sys.stdin.fileno()
@@ -1268,7 +1271,7 @@ class ImageGenCamController:
 
     def _get_bezel_frame(self) -> Image.Image:
         status = self.get_status_snapshot()
-        wifi_connected = bool(self._get_wifi_ssid())
+        wifi_connected = self._get_wifi_connected_cached()
         style_title = status.get("current_prompt_title", "")
         pending = status.get("pending_jobs", "0")
         ready = status.get("ready_images", "0")
@@ -1974,6 +1977,13 @@ class ImageGenCamController:
             logger.exception("Failed to read Wi-Fi SSID")
             return "Unknown"
 
+    def _get_wifi_connected_cached(self) -> bool:
+        now = time.monotonic()
+        if now - self.wifi_last_checked_at >= 5.0:
+            self.wifi_last_checked_at = now
+            self.wifi_connected_cache = bool(self._get_wifi_ssid())
+        return self.wifi_connected_cache
+    
     def _get_mac_address(self) -> str:
         for interface in ("wlan0", "eth0"):
             address_path = Path("/sys/class/net") / interface / "address"
