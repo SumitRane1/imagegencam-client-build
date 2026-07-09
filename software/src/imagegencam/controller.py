@@ -213,6 +213,8 @@ class ImageGenCamController:
 
         self.preview_crop_box = self._build_crop_box(self.preview_size[1], self.preview_size[0])
         self.preview_calibration_lut = self._build_preview_calibration_lut(self.state.preview_calibration)
+        self._bezel_cache_key = None
+        self._bezel_cache: Image.Image | None = None
 
         self.capture_feedback_frame: Image.Image | None = None
         self.capture_feedback_started_at = 0.0
