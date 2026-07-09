@@ -29,8 +29,8 @@ def main() -> None:
     timeout_seconds = float(os.environ.get("IMAGE_GEN_TIMEOUT_SECONDS", "90"))
     input_width = int(os.environ.get("IMAGE_GEN_INPUT_WIDTH", "1024"))
     input_height = int(os.environ.get("IMAGE_GEN_INPUT_HEIGHT", "768"))
-    preview_width = int(os.environ.get("CAMERA_PREVIEW_WIDTH", "480"))
-    preview_height = int(os.environ.get("CAMERA_PREVIEW_HEIGHT", "360"))
+    preview_width = int(os.environ.get("CAMERA_PREVIEW_WIDTH", "240"))
+    preview_height = int(os.environ.get("CAMERA_PREVIEW_HEIGHT", "180"))
     frame_rate = int(os.environ.get("CAMERA_FRAME_RATE", "10"))
 
     prompt_store = PromptStore(project_root / "data" / "prompts.json")

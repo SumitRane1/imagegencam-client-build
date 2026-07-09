@@ -38,6 +38,12 @@ WIDTH = 320
 HEIGHT = 240
 SIDE_CONTROL_TOP_Y = 64
 SIDE_CONTROL_BOTTOM_Y = HEIGHT - 98
+VIEWFINDER_WIDTH = 200
+VIEWFINDER_HEIGHT = 150
+VIEWFINDER_X0 = (WIDTH - VIEWFINDER_WIDTH) // 2      # 60
+VIEWFINDER_Y0 = 40
+VIEWFINDER_X1 = VIEWFINDER_X0 + VIEWFINDER_WIDTH      # 260
+VIEWFINDER_Y1 = VIEWFINDER_Y0 + VIEWFINDER_HEIGHT     # 190
 PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
@@ -831,7 +837,7 @@ class ImageGenCamController:
 
     def _build_crop_box(self, width: int, height: int) -> tuple[int, int, int, int]:
         current_ratio = width / height
-        target_ratio = WIDTH / HEIGHT
+        target_ratio = VIEWFINDER_WIDTH / VIEWFINDER_HEIGHT
         if current_ratio > target_ratio:
             new_width = int(height * target_ratio)
             left = (width - new_width) // 2
@@ -855,9 +861,9 @@ class ImageGenCamController:
         return image
 
     def _fit_camera_for_display(self, image: Image.Image) -> Image.Image:
-        img = self._apply_camera_rotation(image.convert("RGB"))
-        img = img.crop(self.preview_crop_box)
-        return img.resize((WIDTH, HEIGHT), Image.Resampling.NEAREST)
+        img = self._apply_camera_rotation(image).convert("RGB")
+        img = img.crop(self._preview_crop_box)
+        return img.resize((VIEWFINDER_WIDTH, VIEWFINDER_HEIGHT), Image.Resampling.NEAREST)
 
     def _fit_for_generation(self, image: Image.Image) -> Image.Image:
         img = self._apply_camera_rotation(image.convert("RGB"))
@@ -870,10 +876,13 @@ class ImageGenCamController:
         return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
     def _build_display_preview_frame(self, image: Image.Image) -> Image.Image:
-        display_image = self._fit_camera_for_display(image)
-        if self.preview_calibration_lut is not None:
-            display_image = self._apply_preview_calibration(display_image)
-        return display_image
+        viewfinder_image = self._fit_camera_for_display(image)
+        if self._preview_calibration_lut is not None:
+            viewfinder_image = self._apply_preview_calibration(viewfinder_image)
+
+        frame = self._get_bezel_frame()
+        frame.paste(viewfinder_image, (VIEWFINDER_X0, VIEWFINDER_Y0))
+        return frame
 
     def _build_preview_calibration_lut(
         self,
@@ -1255,6 +1264,50 @@ class ImageGenCamController:
         self.battery_overlay_cache = overlay
         return overlay
 
+    def _get_bezel_frame(self) -> Image.Image:
+        status = self.get_status_snapshot()
+        wifi_ssid = self._get_wifi_ssid() or "No Wi-Fi"
+        style_title = status.get("current_prompt_title", "")
+        pending = status.get("pending_jobs", "0")
+        ready = status.get("ready_images", "0")
+
+        cache_key = (
+            self._battery_percent,
+            self._battery_charging,
+            wifi_ssid,
+            style_title,
+            pending,
+            ready,
+        )
+        if self._bezel_cache_key == cache_key and self._bezel_cache is not None:
+            return self._bezel_cache.copy()
+
+        bezel = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+        draw = ImageDraw.Draw(bezel)
+        font_small = self._load_font(12)
+
+        # Top strip: Wi-Fi + battery
+        draw.text((8, 10), wifi_ssid[:18], font=font_small, fill=(255, 255, 255))
+
+        # Bottom strip: style / mode / storage / status
+        draw.text((8, VIEWFINDER_Y1 + 8), f"Style: {style_title}"[:26], font=font_small, fill=(255, 255, 255))
+        draw.text((8, VIEWFINDER_Y1 + 26), f"Pending: {pending}  Ready: {ready}", font=font_small, fill=(200, 200, 200))
+
+        # Viewfinder frame brackets (pro-camera look)
+        bracket = 14
+        color = (255, 255, 255)
+        x0, y0, x1, y1 = VIEWFINDER_X0, VIEWFINDER_Y0, VIEWFINDER_X1, VIEWFINDER_Y1
+        draw.line([(x0, y0 + bracket), (x0, y0), (x0 + bracket, y0)], fill=color, width=2)
+        draw.line([(x1 - bracket, y0), (x1, y0), (x1, y0 + bracket)], fill=color, width=2)
+        draw.line([(x0, y1 - bracket), (x0, y1), (x0 + bracket, y1)], fill=color, width=2)
+        draw.line([(x1 - bracket, y1), (x1, y1), (x1, y1 - bracket)], fill=color, width=2)
+
+        bezel_with_battery = self._decorate_with_battery(bezel)
+
+        self._bezel_cache_key = cache_key
+        self._bezel_cache = bezel_with_battery
+        return bezel_with_battery.copy()
+    
     def _draw_battery_overlay(self, image: Image.Image) -> Image.Image:
         overlay = self._get_battery_overlay()
         if overlay is None:
