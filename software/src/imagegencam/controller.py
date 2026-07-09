@@ -1365,7 +1365,7 @@ class ImageGenCamController:
         box: tuple[int, int, int, int],
         *,
         radius: int = 14,
-        fill: tuple[int, int, int, int] = (255, 255, 255, 172),
+        fill: tuple[int, int, int, int] = (255, 255, 255, 205),
         outline: tuple[int, int, int, int] = (255, 255, 255, 230),
         width: int = 2,
     ) -> Image.Image:
