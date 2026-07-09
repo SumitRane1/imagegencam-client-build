@@ -44,7 +44,7 @@ VIEWFINDER_X0 = (WIDTH - VIEWFINDER_WIDTH) // 2      # 60
 VIEWFINDER_Y0 = 40
 VIEWFINDER_X1 = VIEWFINDER_X0 + VIEWFINDER_WIDTH      # 260
 VIEWFINDER_Y1 = VIEWFINDER_Y0 + VIEWFINDER_HEIGHT     # 190
-PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
+PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 12.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 BATTERY_REFRESH_INTERVAL_SECONDS = 20.0
@@ -1268,7 +1268,7 @@ class ImageGenCamController:
 
     def _get_bezel_frame(self) -> Image.Image:
         status = self.get_status_snapshot()
-        wifi_ssid = self._get_wifi_ssid() or "No Wi-Fi"
+        wifi_connected = bool(self._get_wifi_ssid())
         style_title = status.get("current_prompt_title", "")
         pending = status.get("pending_jobs", "0")
         ready = status.get("ready_images", "0")
@@ -1276,7 +1276,7 @@ class ImageGenCamController:
         cache_key = (
             self.battery_percent,
             self.battery_charging,
-            wifi_ssid,
+            wifi_connected,
             style_title,
             pending,
             ready,
@@ -1289,7 +1289,8 @@ class ImageGenCamController:
         font_small = self._load_font(12)
 
         # Top strip: Wi-Fi + battery
-        draw.text((8, 10), wifi_ssid[:18], font=font_small, fill=(255, 255, 255))
+        dot_color = (90, 255, 126) if wifi_connected else (255, 107, 107)
+        draw.ellipse((8, 10, 18, 20), fill=dot_color)
 
         # Bottom strip: style / mode / storage / status
         draw.text((8, VIEWFINDER_Y1 + 8), f"Style: {style_title}"[:26], font=font_small, fill=(255, 255, 255))
@@ -1622,27 +1623,6 @@ class ImageGenCamController:
             draw = ImageDraw.Draw(screen)
             if self.ready_unseen_count > 0:
                 self._draw_sparkle_icon(draw, 42, SIDE_CONTROL_BOTTOM_Y + 8, color=(255, 238, 130), radius=6)
-
-            current_entry = self.prompt_entries[self.prompt_order[self.selected_prompt_index]]
-            title = self._truncate_text_pixels(
-                current_entry["title"],
-                title_font,
-                title_box[2] - title_box[0] - 18,
-            )
-            screen = self._apply_glass_panel(
-                screen,
-                title_box,
-                radius=12,
-                fill=(255, 255, 255, 182),
-                outline=(255, 255, 255, 232),
-            )
-            draw = ImageDraw.Draw(screen)
-            text_box = draw.textbbox((0, 0), title, font=title_font)
-            text_w = text_box[2] - text_box[0]
-            text_h = text_box[3] - text_box[1]
-            text_x = title_box[0] + ((title_box[2] - title_box[0]) - text_w) / 2
-            text_y = title_box[1] + ((title_box[3] - title_box[1]) - text_h) / 2 - text_box[1]
-            draw.text((text_x, text_y), title, font=title_font, fill=(18, 18, 18))
 
         return screen
 
