@@ -862,7 +862,7 @@ class ImageGenCamController:
 
     def _fit_camera_for_display(self, image: Image.Image) -> Image.Image:
         img = self._apply_camera_rotation(image).convert("RGB")
-        img = img.crop(self._preview_crop_box)
+        img = img.crop(self.preview_crop_box)
         return img.resize((VIEWFINDER_WIDTH, VIEWFINDER_HEIGHT), Image.Resampling.NEAREST)
 
     def _fit_for_generation(self, image: Image.Image) -> Image.Image:
