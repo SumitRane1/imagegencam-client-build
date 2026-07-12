@@ -387,7 +387,7 @@ class ImageGenCamController:
             buffer_count=2,
         )
         self.still_camera_config = self.picam2.create_still_configuration(
-            main={"size": (2028, 1520), "format": "RGB888"},
+            main={"size": (2592, 1944), "format": "RGB888"},
             buffer_count=1,
         )
         self.picam2.configure(self.preview_camera_config)
