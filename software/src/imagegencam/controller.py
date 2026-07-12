@@ -386,6 +386,10 @@ class ImageGenCamController:
             controls={"FrameRate": self.frame_rate},
             buffer_count=2,
         )
+        self.still_camera_config = self.picam2.create_still_configuration(
+            main={"size": (2028, 1520), "format": "RGB888"},
+            buffer_count=1,
+        )
         self.picam2.configure(self.preview_camera_config)
         self.picam2.start()
         time.sleep(1.0)
@@ -411,6 +415,18 @@ class ImageGenCamController:
                 self._fail_fast_camera_restart(self.camera_failure)
                 return
 
+    def _capture_high_res_still(self) -> Image.Image:
+        with self.camera_access_lock:
+            request = self.picam2.switch_mode_and_capture_request(self.still_camera_config)
+            try:
+                array = request.make_array("main")
+            finally:
+                request.release()
+            self.picam2.switch_mode(self.preview_camera_config)
+        if self.swap_red_blue:
+            array = array[:, :, ::-1]
+        return Image.fromarray(array, "RGB")
+    
     def _setup_buttons(self) -> None:
         self.use_button_polling = False
         self.button_pins = ()
@@ -2548,7 +2564,7 @@ class ImageGenCamController:
 
         with self.latest_frame_lock:
             display_frame = self.latest_display_frame.copy() if self.latest_display_frame else None
-            source_frame = self.latest_preview_frame.copy() if self.latest_preview_frame else None
+            source_frame = self._capture_high_res_still()
 
         if display_frame is None or source_frame is None:
             with self.state_lock:
@@ -2584,7 +2600,7 @@ class ImageGenCamController:
 
         with self.latest_frame_lock:
             display_frame = self.latest_display_frame.copy() if self.latest_display_frame else None
-            source_frame = self.latest_preview_frame.copy() if self.latest_preview_frame else None
+            source_frame = self._capture_high_res_still()
 
         if display_frame is None or source_frame is None:
             with self.state_lock:
@@ -2630,7 +2646,7 @@ class ImageGenCamController:
 
         with self.latest_frame_lock:
             display_frame = self.latest_display_frame.copy() if self.latest_display_frame else None
-            source_frame = self.latest_preview_frame.copy() if self.latest_preview_frame else None
+            source_frame = self._capture_high_res_still()
 
         if display_frame is None or source_frame is None:
             with self.state_lock:
