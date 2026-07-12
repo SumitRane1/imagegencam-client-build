@@ -1335,23 +1335,22 @@ class ImageGenCamController:
         return reduced.resize((WIDTH, HEIGHT), Image.Resampling.BILINEAR)
 
     def _get_modal_background(self) -> Image.Image:
+        now = time.monotonic()
+        if (
+            self.modal_background_image is not None
+            and (now - getattr(self, "modal_background_built_at", 0.0)) < 1.0
+        ):
+            return self.modal_background_image.copy()
         with self.latest_frame_lock:
             base = self.latest_display_frame.copy() if self.latest_display_frame else None
-            frame_id = self.latest_preview_frame_id
-
         if base is None:
             return Image.new("RGB", (WIDTH, HEIGHT), (230, 234, 238))
-
-        if self.modal_background_image is not None and self.modal_background_frame_id == frame_id:
-            return self.modal_background_image.copy()
-
         blurred = self._fast_blur(base, 10.0).convert("RGBA")
         softened = Image.alpha_composite(
-            blurred,
-            Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 118)),
+            blurred, Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 118)),
         ).convert("RGB")
         self.modal_background_image = softened
-        self.modal_background_frame_id = frame_id
+        self.modal_background_built_at = now
         return softened.copy()
 
     def _draw_chip(
