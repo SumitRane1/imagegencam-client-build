@@ -376,6 +376,9 @@ class ImageGenCamController:
             height=HEIGHT,
         )
         self.buffer = Image.new("RGB", (WIDTH, HEIGHT))
+        blank = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+        self.display.image(blank)
+        time.sleep(0.05)
 
     def _setup_camera(self) -> None:
         from picamera2 import Picamera2
