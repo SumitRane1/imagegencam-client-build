@@ -34,16 +34,25 @@ from .openai_client import OpenAIImageEditor, OpenAIImageError, OpenAIMagicPromp
 from .wifi_manager import NetworkManagerWifi, WifiNetwork, WifiRollback
 
 
+PANEL_WIDTH = 320
+PANEL_HEIGHT = 240
+
 WIDTH = 240
-HEIGHT = 240
+HEIGHT = 180
+
+OFFSET_X = (PANEL_WIDTH - WIDTH) // 2     # 40
+OFFSET_Y = (PANEL_HEIGHT - HEIGHT) // 2   # 30
+
 SIDE_CONTROL_TOP_Y = 50
-SIDE_CONTROL_BOTTOM_Y = HEIGHT - 78
-VIEWFINDER_WIDTH = 200
-VIEWFINDER_HEIGHT = 180
-VIEWFINDER_X0 = (WIDTH - VIEWFINDER_WIDTH) // 2  # 20
-VIEWFINDER_Y0 = 20
-VIEWFINDER_X1 = VIEWFINDER_X0 + VIEWFINDER_WIDTH  # 220
-VIEWFINDER_Y1 = VIEWFINDER_Y0 + VIEWFINDER_HEIGHT  # 200
+SIDE_CONTROL_BOTTOM_Y = HEIGHT - 78       # 102
+
+VIEWFINDER_WIDTH = WIDTH                   # 240 — fills the small virtual screen
+VIEWFINDER_HEIGHT = HEIGHT                 # 180
+VIEWFINDER_X0 = 0
+VIEWFINDER_Y0 = 0
+VIEWFINDER_X1 = WIDTH                      # 240
+VIEWFINDER_Y1 = HEIGHT                     # 180
+
 PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 12.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
@@ -372,10 +381,10 @@ class ImageGenCamController:
             dc=dc_pin,
             rst=reset_pin,
             baudrate=24000000,
-            width=WIDTH,
-            height=HEIGHT,
+            width=PANEL_WIDTH,
+            height=PANEL_HEIGHT,
         )
-        self.buffer = Image.new("RGB", (WIDTH, HEIGHT))
+        self.buffer = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT))
 
     def _setup_camera(self) -> None:
         from picamera2 import Picamera2
@@ -971,7 +980,11 @@ class ImageGenCamController:
         self._record_display_frame(time.monotonic())
         composed = self._decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
-        r, g, b = composed.convert("RGB").split()
+
+        canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
+        canvas.paste(composed.convert("RGB"), (OFFSET_X, OFFSET_Y))
+
+        r, g, b = canvas.split()
         composed_bgr = Image.merge("RGB", (b, g, r))
         with self.display_lock:
             self.display.image(composed_bgr)
