@@ -34,16 +34,16 @@ from .openai_client import OpenAIImageEditor, OpenAIImageError, OpenAIMagicPromp
 from .wifi_manager import NetworkManagerWifi, WifiNetwork, WifiRollback
 
 
-WIDTH = 320
+WIDTH = 240
 HEIGHT = 240
-SIDE_CONTROL_TOP_Y = 64
-SIDE_CONTROL_BOTTOM_Y = HEIGHT - 98
+SIDE_CONTROL_TOP_Y = 50
+SIDE_CONTROL_BOTTOM_Y = HEIGHT - 78
 VIEWFINDER_WIDTH = 200
-VIEWFINDER_HEIGHT = 150
-VIEWFINDER_X0 = (WIDTH - VIEWFINDER_WIDTH) // 2      # 60
-VIEWFINDER_Y0 = 40
-VIEWFINDER_X1 = VIEWFINDER_X0 + VIEWFINDER_WIDTH      # 260
-VIEWFINDER_Y1 = VIEWFINDER_Y0 + VIEWFINDER_HEIGHT     # 190
+VIEWFINDER_HEIGHT = 180
+VIEWFINDER_X0 = (WIDTH - VIEWFINDER_WIDTH) // 2  # 20
+VIEWFINDER_Y0 = 20
+VIEWFINDER_X1 = VIEWFINDER_X0 + VIEWFINDER_WIDTH  # 220
+VIEWFINDER_Y1 = VIEWFINDER_Y0 + VIEWFINDER_HEIGHT  # 200
 PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 12.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
@@ -1128,8 +1128,8 @@ class ImageGenCamController:
     def _show_text_screen(self, title: str, subtitle: str = "", fill=(255, 255, 255)) -> None:
         screen = Image.new("RGB", (WIDTH, HEIGHT), fill)
         draw = ImageDraw.Draw(screen)
-        title_font = self._load_font(28)
-        body_font = self._load_font(18)
+        title_font = self._load_font(21)
+        body_font = self._load_font(14)
         draw.text((12, 18), title[:24], font=title_font, fill=(0, 0, 0))
         if subtitle:
             lines = self._wrap_text_pixels(subtitle, body_font, WIDTH - 24)
@@ -1305,7 +1305,7 @@ class ImageGenCamController:
 
         bezel = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
         draw = ImageDraw.Draw(bezel)
-        font_small = self._load_font(12)
+        font_small = self._load_font(9)
 
         # Top strip: Wi-Fi + battery
         dot_color = (90, 255, 126) if wifi_connected else (255, 107, 107)
@@ -1351,23 +1351,7 @@ class ImageGenCamController:
         return reduced.resize((WIDTH, HEIGHT), Image.Resampling.BILINEAR)
 
     def _get_modal_background(self) -> Image.Image:
-        now = time.monotonic()
-        if (
-            self.modal_background_image is not None
-            and (now - getattr(self, "modal_background_built_at", 0.0)) < 1.0
-        ):
-            return self.modal_background_image.copy()
-        with self.latest_frame_lock:
-            base = self.latest_display_frame.copy() if self.latest_display_frame else None
-        if base is None:
-            return Image.new("RGB", (WIDTH, HEIGHT), (230, 234, 238))
-        blurred = self._fast_blur(base, 10.0).convert("RGBA")
-        softened = Image.alpha_composite(
-            blurred, Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 118)),
-        ).convert("RGB")
-        self.modal_background_image = softened
-        self.modal_background_built_at = now
-        return softened.copy()
+        return Image.new("RGB", (WIDTH, HEIGHT), (18, 18, 18))
 
     def _draw_chip(
         self,
@@ -1390,7 +1374,7 @@ class ImageGenCamController:
         if badge:
             badge_box = (box[2] - 18, box[1] - 6, box[2] + 6, box[1] + 18)
             draw.rounded_rectangle(badge_box, radius=8, fill=(255, 193, 7))
-            badge_font = self._load_font(10)
+            badge_font = self._load_font(8)
             badge_text = self._truncate_text_pixels(badge, badge_font, 18)
             badge_width = draw.textlength(badge_text, font=badge_font)
             draw.text(
@@ -1423,14 +1407,12 @@ class ImageGenCamController:
         )
 
     def _draw_album_sparkle(self, draw: ImageDraw.ImageDraw, center_x: int, center_y: int) -> None:
-        phase = time.monotonic() * 5.0
-        radius = 4 + int(((math.sin(phase) + 1.0) / 2.0) * 3.0)
         self._draw_sparkle_icon(
             draw,
             center_x,
             center_y,
             color=(255, 238, 130),
-            radius=radius,
+            radius=5,
         )
 
     def _apply_glass_panel(
@@ -1675,30 +1657,25 @@ class ImageGenCamController:
         screen = self._draw_side_tab(screen, icon="check", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
         screen = self._draw_scroll_hints(screen)
-        item_font = self._load_font(14)
+        item_font = self._load_font(11)
         visible_count = 4
         total_prompts = len(self.prompt_order)
         window_start = max(0, self.prompt_picker_index - 1)
         max_start = max(0, total_prompts - visible_count)
         window_start = min(window_start, max_start)
         visible_prompt_ids = self.prompt_order[window_start : window_start + visible_count]
-        y = 28
+        y = 20
         for absolute_index, button in enumerate(visible_prompt_ids, start=window_start):
             entry = self.prompt_entries[button]
-            box = (54, y, WIDTH - 56, y + 38)
+            box = (40, y, WIDTH - 42, y + 30)
             active = absolute_index == self.prompt_picker_index
-            fill = (255, 255, 255, 228) if active else (255, 255, 255, 154)
-            screen = self._apply_glass_panel(
-                screen,
-                box,
-                radius=12,
-                fill=fill,
-                outline=(255, 255, 255, 232),
-            )
+            fill = (255, 255, 255) if active else (60, 60, 60)
+            text_color = (0, 0, 0) if active else (255, 255, 255)
             draw = ImageDraw.Draw(screen)
-            label = self._truncate_text_pixels(entry["title"], item_font, box[2] - box[0] - 24)
-            draw.text((box[0] + 12, box[1] + 10), label, font=item_font, fill=(0, 0, 0))
-            y += 44
+            draw.rounded_rectangle(box, radius=10, fill=fill, outline=(255, 255, 255))
+            label = self._truncate_text_pixels(entry["title"], item_font, box[2] - box[0] - 18)
+            draw.text((box[0] + 10, box[1] + 7), label, font=item_font, fill=text_color)
+            y += 36
 
         self._render_to_display(screen.convert("RGB"))
 
@@ -2302,22 +2279,17 @@ class ImageGenCamController:
 
     def _render_wifi_connecting_frame(self) -> None:
         screen = self._get_modal_background().convert("RGBA")
-        screen = self._apply_glass_panel(
-            screen,
-            (54, 44, WIDTH - 54, HEIGHT - 44),
-            radius=18,
-            fill=(255, 255, 255, 205),
-            outline=(255, 255, 255, 236),
-        )
+        box = (24, 30, WIDTH - 24, HEIGHT - 30)
         draw = ImageDraw.Draw(screen)
-        title_font = self._load_font(16)
-        body_font = self._load_font(12)
-        draw.text((82, 82), "Trying Wi-Fi...", font=title_font, fill=(18, 18, 18))
+        draw.rounded_rectangle(box, radius=14, fill=(30, 30, 30, 255), outline=(90, 90, 90, 255), width=1)
+        title_font = self._load_font(14)
+        body_font = self._load_font(10)
+        draw.text((44, 60), "Trying Wi-Fi...", font=title_font, fill=(255, 255, 255))
         draw.text(
-            (82, 112),
-            self._truncate_text_pixels(self.wifi_connect_message or "Rollback is armed.", body_font, 160),
+            (44, 84),
+            self._truncate_text_pixels(self.wifi_connect_message or "Rollback is armed.", body_font, 150),
             font=body_font,
-            fill=(60, 60, 60),
+            fill=(200, 200, 200),
         )
         self._render_to_display(screen.convert("RGB"))
 
@@ -2325,24 +2297,19 @@ class ImageGenCamController:
         screen = self._get_modal_background().convert("RGBA")
         screen = self._draw_side_tab(screen, label="KEEP", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, label="UNDO", y=SIDE_CONTROL_BOTTOM_Y, side="left")
-        screen = self._apply_glass_panel(
-            screen,
-            (54, 36, WIDTH - 46, HEIGHT - 36),
-            radius=18,
-            fill=(255, 255, 255, 205),
-            outline=(255, 255, 255, 236),
-        )
+        box = (24, 26, WIDTH - 20, HEIGHT - 26)
         draw = ImageDraw.Draw(screen)
-        title_font = self._load_font(16)
-        body_font = self._load_font(12)
-        meta_font = self._load_font(10)
+        draw.rounded_rectangle(box, radius=14, fill=(30, 30, 30, 255), outline=(90, 90, 90, 255), width=1)
+        title_font = self._load_font(14)
+        body_font = self._load_font(10)
+        meta_font = self._load_font(8)
         seconds_left = 0
         if self.wifi_pending_rollback:
             seconds_left = max(0, int(self.wifi_pending_rollback.expires_at - time.monotonic()))
-        draw.text((78, 62), "Wi-Fi changed", font=title_font, fill=(18, 18, 18))
-        draw.text((78, 94), self._truncate_text_pixels(self._get_wifi_ssid(), body_font, 170), font=body_font, fill=(18, 18, 18))
-        draw.text((78, 122), "Press KEEP if this works.", font=body_font, fill=(60, 60, 60))
-        draw.text((78, 144), f"Auto-rollback in {seconds_left}s", font=meta_font, fill=(60, 60, 60))
+        draw.text((40, 46), "Wi-Fi changed", font=title_font, fill=(255, 255, 255))
+        draw.text((40, 70), self._truncate_text_pixels(self._get_wifi_ssid(), body_font, 150), font=body_font, fill=(255, 255, 255))
+        draw.text((40, 90), "Press KEEP if this works.", font=body_font, fill=(200, 200, 200))
+        draw.text((40, 108), f"Auto-rollback in {seconds_left}s", font=meta_font, fill=(200, 200, 200))
         self._render_to_display(screen.convert("RGB"))
 
     def _build_current_album_download_url(self) -> str | None:
@@ -2370,9 +2337,9 @@ class ImageGenCamController:
         qr.add_data(url)
         qr.make(fit=True)
         qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        qr_image = ImageOps.contain(qr_image, (136, 136), Image.Resampling.NEAREST)
-        panel = Image.new("RGB", (148, 148), (255, 255, 255))
-        panel.paste(qr_image, ((148 - qr_image.width) // 2, (148 - qr_image.height) // 2))
+        qr_image = ImageOps.contain(qr_image, (110, 110), Image.Resampling.NEAREST)
+        panel = Image.new("RGB", (120, 120), (255, 255, 255))
+        panel.paste(qr_image, ((120 - qr_image.width) // 2, (120 - qr_image.height) // 2))
 
         self.album_qr_cached_path = path
         self.album_qr_cached_url = url
@@ -2391,14 +2358,14 @@ class ImageGenCamController:
             screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
             screen = self._draw_scroll_hints(screen)
             draw = ImageDraw.Draw(screen)
-            title_font = self._load_font(22)
-            body_font = self._load_font(14)
+            title_font = self._load_font(17)
+            body_font = self._load_font(11)
             if self.gallery_paths and self.album_show_source:
-                draw.text((76, 82), "No Source Found", font=title_font, fill=(18, 18, 18))
-                draw.text((76, 110), "Press shutter to go back.", font=body_font, fill=(18, 18, 18))
+                draw.text((56, 60), "No Source Found", font=title_font, fill=(18, 18, 18))
+                draw.text((56, 84), "Press shutter to go back.", font=body_font, fill=(18, 18, 18))
             else:
-                draw.text((86, 82), "Album Empty", font=title_font, fill=(18, 18, 18))
-                draw.text((86, 110), "Take a photo to add one.", font=body_font, fill=(18, 18, 18))
+                draw.text((64, 60), "Album Empty", font=title_font, fill=(18, 18, 18))
+                draw.text((64, 84), "Take a photo to add one.", font=body_font, fill=(18, 18, 18))
             self._render_to_display(screen.convert("RGB"))
             return
 
@@ -2417,25 +2384,11 @@ class ImageGenCamController:
             self._render_album_frame()
             return
 
-        base = self._get_album_display_image()
-        if base is None:
-            screen = self._get_modal_background().convert("RGBA")
-        else:
-            screen = self._fast_blur(base, 10.0).convert("RGBA")
-            screen = Image.alpha_composite(
-                screen,
-                Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 108)),
-            )
-
+        screen = self._get_modal_background().convert("RGBA")
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
-        screen = self._apply_glass_panel(
-            screen,
-            (58, 18, WIDTH - 58, HEIGHT - 18),
-            radius=18,
-            fill=(255, 255, 255, 196),
-            outline=(255, 255, 255, 236),
-        )
-        panel_box = (58, 18, WIDTH - 58, HEIGHT - 18)
+        panel_box = (30, 20, WIDTH - 30, HEIGHT - 20)
+        draw = ImageDraw.Draw(screen)
+        draw.rounded_rectangle(panel_box, radius=14, fill=(240, 240, 240, 255), outline=(200, 200, 200, 255), width=1)
         qr_x = panel_box[0] + ((panel_box[2] - panel_box[0]) - qr_panel.width) // 2
         qr_y = panel_box[1] + ((panel_box[3] - panel_box[1]) - qr_panel.height) // 2
         screen.paste(qr_panel, (qr_x, qr_y))
