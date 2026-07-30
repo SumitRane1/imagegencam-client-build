@@ -440,8 +440,38 @@ class ImageGenCamController:
         self.use_button_polling = False
         self.button_pins = ()
         self.button_last_states = {}
+
+        self.button_lookup = {
+            5: "ui_up",
+            6: "ui_down",
+            13: "ui_prompt",
+            19: "ui_album",
+            26: "shutter",
+        }
+        self.gpio_buttons = {}
+        try:
+            from gpiozero import Device, Button
+            from gpiozero.pins.lgpio import LGPIOFactory
+
+            Device.pin_factory = LGPIOFactory()
+            for pin, action in self.button_lookup.items():
+                btn = Button(pin, pull_up=True, bounce_time=0.05)
+                btn.when_pressed = self._make_gpio_button_handler(action)
+                self.gpio_buttons[pin] = btn
+            logger.info("GPIO buttons initialized: %s", self.button_lookup)
+        except Exception:
+            logger.exception("GPIO button setup failed; falling back to keyboard input only")
+
         self.keyboard_thread = Thread(target=self.keyboard_input_loop, daemon=True)
         self.keyboard_thread.start()
+
+    def _make_gpio_button_handler(self, action: str):
+        def handler() -> None:
+            if action == "shutter":
+                self._queue_shutter_event("shutter")
+            else:
+                self._queue_ui_event(action)
+        return handler
 
     def keyboard_input_loop(self) -> None:
         import sys
