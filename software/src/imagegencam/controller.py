@@ -36,9 +36,9 @@ from .wifi_manager import NetworkManagerWifi, WifiNetwork, WifiRollback
 
 PANEL_WIDTH = 320
 PANEL_HEIGHT = 240
-WIDTH = 272
+WIDTH = 270
 HEIGHT = 240
-OFFSET_X = 4
+OFFSET_X = 8
 OFFSET_Y = 0
 SIDE_CONTROL_TOP_Y = 50
 SIDE_CONTROL_BOTTOM_Y = HEIGHT - 78  # 162
