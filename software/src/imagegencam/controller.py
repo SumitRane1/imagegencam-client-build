@@ -53,6 +53,7 @@ PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 12.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 BATTERY_REFRESH_INTERVAL_SECONDS = 20.0
+IDLE_BLANK_TIMEOUT_SECONDS = 60.0
 PISUGAR_POWER_BUTTON_POLL_INTERVAL_SECONDS = 0.02
 PISUGAR_POWER_BUTTON_MAX_SHUTTER_PRESS_SECONDS = 0.6
 QUEUE_RETRY_BASE_SECONDS = 15.0
@@ -301,6 +302,10 @@ class ImageGenCamController:
         self.generation_worker_thread: Thread | None = None
         self.magic_prompt_worker_thread: Thread | None = None
         self.running = True
+        
+        self.last_activity_at = time.monotonic()
+        self.screen_blanked = False
+        self.camera_paused = False
 
         self._install_signal_handlers()
         self._prepare_shutter_event_dir()
@@ -403,6 +408,9 @@ class ImageGenCamController:
 
     def _camera_capture_loop(self) -> None:
         while self.running:
+            if self.camera_paused:
+                time.sleep(0.1)
+                continue
             try:
                 with self.camera_access_lock:
                     frame_array = self.picam2.capture_array("main")
@@ -503,6 +511,7 @@ class ImageGenCamController:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def _queue_ui_event(self, action: str) -> None:
+        self.last_activity_at = time.monotonic()
         now = time.monotonic()
         if now - self.last_ui_press_time < 0.11:
             return
@@ -510,6 +519,7 @@ class ImageGenCamController:
         self.event_queue.put(action)
 
     def _queue_shutter_event(self, event_name: str = "shutter") -> None:
+        self.last_activity_at = time.monotonic()
         now = time.monotonic()
         last_seen_at = self.last_shutter_event_times.get(event_name, 0.0)
         if now - last_seen_at < 0.125:
@@ -928,8 +938,13 @@ class ImageGenCamController:
         return img.resize(self.generation_input_size, Image.Resampling.BILINEAR)
 
     def _fit_generated_for_display(self, image: Image.Image) -> Image.Image:
-        img = self._crop_to_display_ratio(image)
-        return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+        img = image.convert("RGB")
+        fitted = ImageOps.contain(img, (WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+        x = (WIDTH - fitted.width) // 2
+        y = (HEIGHT - fitted.height) // 2
+        canvas.paste(fitted, (x, y))
+        return canvas
 
     def _build_display_preview_frame(self, image: Image.Image) -> Image.Image:
         viewfinder_image = self._fit_camera_for_display(image)
@@ -2409,8 +2424,6 @@ class ImageGenCamController:
             return
 
         screen = image.convert("RGBA")
-        overlay = Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 38))
-        screen = Image.alpha_composite(screen, overlay)
         screen = self._draw_side_tab(screen, icon="download", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
         screen = self._draw_scroll_hints(screen)
@@ -3229,6 +3242,22 @@ class ImageGenCamController:
                 if self.camera_failure is not None:
                     raise RuntimeError(self.camera_failure)
                 self._check_stale_camera(now)
+                idle_for = now - self.last_activity_at
+                if idle_for > IDLE_BLANK_TIMEOUT_SECONDS and self.state.mode == "preview":
+                    if not self.screen_blanked:
+                        self._render_to_display(Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), decorate_battery=False)
+                        with self.camera_access_lock:
+                            self.camera_paused = True
+                            self.picam2.stop()
+                        self.screen_blanked = True
+                    time.sleep(0.2)
+                    continue
+                elif self.screen_blanked:
+                    with self.camera_access_lock:
+                        self.picam2.start()
+                        self.camera_paused = False
+                    self.screen_blanked = False
+                    self.last_drawn_mode = None
                 self._maybe_configure_pisugar_button()
 
                 self._poll_buttons()
