@@ -1037,14 +1037,8 @@ class ImageGenCamController:
         bgr = np.ascontiguousarray(arr[:, :, ::-1])
         composed_bgr = Image.fromarray(bgr, "RGB")
 
-        try:
-            self.display_write_queue.get_nowait()
-        except Empty:
-            pass
-        try:
-            self.display_write_queue.put_nowait(composed_bgr)
-        except Full:
-            pass
+        with self.display_lock:
+            self.display.image(composed_bgr)
 
     def _display_writer_loop(self) -> None:
         while self.running:
