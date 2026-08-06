@@ -2116,64 +2116,74 @@ class ImageGenCamController:
         self.cpu_last_read_at = now
         return self.cpu_usage_percent
 
-    def _get_web_app_qr_image(self) -> tuple[Image.Image, str]:
+    def _get_web_app_qr_image(self, size: int = 92) -> tuple[Image.Image, str]:
         url = f"{self._get_local_base_url()}/"
-        if self.web_app_qr_image is not None and self.web_app_qr_url == url:
+        cache_key = (url, size)
+        if getattr(self, "web_app_qr_cache_key", None) == cache_key and self.web_app_qr_image is not None:
             return self.web_app_qr_image.copy(), url
 
         qr = qrcode.QRCode(border=1, box_size=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(url)
         qr.make(fit=True)
         qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        qr_image = ImageOps.contain(qr_image, (92, 92), Image.Resampling.NEAREST)
-        panel = Image.new("RGB", (104, 104), (255, 255, 255))
-        panel.paste(qr_image, ((104 - qr_image.width) // 2, (104 - qr_image.height) // 2))
+        inner = size - 10
+        qr_image = ImageOps.contain(qr_image, (inner, inner), Image.Resampling.NEAREST)
+        panel = Image.new("RGB", (size, size), (255, 255, 255))
+        panel.paste(qr_image, ((size - qr_image.width) // 2, (size - qr_image.height) // 2))
+
         self.web_app_qr_image = panel
-        self.web_app_qr_url = url
+        self.web_app_qr_cache_key = cache_key
         return panel.copy(), url
+
 
     def _render_diagnostics_frame(self) -> None:
         screen = self._get_modal_background().convert("RGBA")
         screen = self._draw_side_tab(screen, label="Wi-Fi", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
         screen = self._draw_side_tab(screen, label="INFO", y=SIDE_CONTROL_TOP_Y, side="right")
+
+        panel_box = (78, 16, WIDTH - 18, HEIGHT - 16)  # (78, 16, 254, 224)
         screen = self._apply_glass_panel(
-            screen,
-            (76, 16, WIDTH - 18, HEIGHT - 16),
-            radius=18,
-            fill=(255, 255, 255, 192),
-            outline=(255, 255, 255, 236),
+            screen, panel_box, radius=18,
+            fill=(255, 255, 255, 235), outline=(255, 255, 255, 245),
         )
         draw = ImageDraw.Draw(screen)
-        title_font = self._load_font(15)
-        body_font = self._load_font(12)
-        value_font = self._load_font(11)
-        meta_font = self._load_font(9)
-        note_font = self._load_font(8)
-        content_x = 88
-        draw.text((content_x, 28), "Phone app", font=title_font, fill=(18, 18, 18))
+
+        title_font = self._load_font(16)
+        label_font = self._load_font(10)
+        value_font = self._load_font(12)
+        note_font = self._load_font(9)
+
+        panel_x0, _, panel_x1, panel_y1 = panel_box
+        content_x0 = panel_x0 + 12   # 90
+        content_x1 = panel_x1 - 12   # 242
+        content_width = content_x1 - content_x0  # 152
+
+        draw.text((content_x0, 26), "Phone app", font=title_font, fill=(18, 18, 18))
 
         ssid = self._get_wifi_ssid()
         short_url = self._get_short_app_url().replace("http://", "")
-        draw.text((content_x, 62), "Wi-Fi", font=body_font, fill=(18, 18, 18))
-        draw.text(
-            (content_x, 82),
-            self._truncate_text_pixels(ssid, value_font, 90),
-            font=value_font,
-            fill=(18, 18, 18),
-        )
-        draw.text((content_x, 116), "Open", font=body_font, fill=(18, 18, 18))
-        for index, line in enumerate(self._wrap_text_pixels(short_url, meta_font, 90)[:3]):
-            draw.text((content_x, 136 + index * 14), line, font=meta_font, fill=(18, 18, 18))
-        note = "Note: your phone and camera must be on the same Wi-Fi network or mobile hotspot."
-        for index, line in enumerate(self._wrap_text_pixels(note, note_font, 206)[:3]):
-            draw.text((content_x, 176 + index * 12), line, font=note_font, fill=(60, 60, 60))
-        draw.text((content_x, 214), "top-left: Wi-Fi / top-right: info", font=meta_font, fill=(60, 60, 60))
 
-        qr_panel, _url = self._get_web_app_qr_image()
-        qr_x = WIDTH - qr_panel.width - 30
-        qr_y = 66
+        draw.text((content_x0, 48), "NETWORK", font=label_font, fill=(120, 120, 120))
+        draw.text((content_x0, 60), self._truncate_text_pixels(ssid, value_font, content_width),
+                font=value_font, fill=(18, 18, 18))
+
+        draw.text((content_x0, 80), "OPEN ON PHONE", font=label_font, fill=(120, 120, 120))
+        url_lines = self._wrap_text_pixels(short_url, value_font, content_width)[:2]
+        for index, line in enumerate(url_lines):
+            draw.text((content_x0, 92 + index * 15), line, font=value_font, fill=(18, 18, 18))
+
+        qr_panel, _url = self._get_web_app_qr_image(size=86)
+        qr_x = content_x0 + (content_width - qr_panel.width) // 2
+        qr_y = 92 + len(url_lines) * 15 + 8
         screen.paste(qr_panel, (qr_x, qr_y))
+
+        note_y = qr_y + qr_panel.height + 8
+        note = "Same Wi-Fi or hotspot required"
+        draw.text((content_x0, min(note_y, panel_y1 - 22)),
+                self._truncate_text_pixels(note, note_font, content_width),
+                font=note_font, fill=(90, 90, 90))
+
         self._render_to_display(screen.convert("RGB"))
 
     def _render_diagnostics_detail_frame(self) -> None:
