@@ -1811,6 +1811,8 @@ class ImageGenCamController:
         try:
             with Image.open(path) as source:
                 fitted = self._fit_generated_for_display(source.convert("RGB"))
+                if self.preview_calibration_lut is not None:
+                    fitted = self._apply_preview_calibration(fitted)
         except Exception:
             logger.exception("Failed to load album image %s", path)
             self.gallery_paths = [candidate for candidate in self.gallery_paths if candidate != path]
@@ -1949,6 +1951,8 @@ class ImageGenCamController:
         try:
             with Image.open(source_path) as source:
                 fitted = self._fit_generated_for_display(source.convert("RGB"))
+                if self.preview_calibration_lut is not None:
+                    fitted = self._apply_preview_calibration(fitted)
         except Exception:
             logger.exception("Failed to load album source image %s", source_path)
             return None
