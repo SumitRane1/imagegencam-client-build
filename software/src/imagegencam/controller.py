@@ -302,9 +302,7 @@ class ImageGenCamController:
 
         self.camera_failure: str | None = None
         self.camera_thread: Thread | None = None
-        self.display_write_queue: Queue = Queue(maxsize=1)
-        self.display_writer_thread = Thread(target=self._display_writer_loop, daemon=True)
-        self.display_writer_thread.start()
+        self.display_writer_thread: Thread | None = None
         self.capture_worker_thread: Thread | None = None
         self.generation_worker_thread: Thread | None = None
         self.magic_prompt_worker_thread: Thread | None = None
@@ -317,6 +315,9 @@ class ImageGenCamController:
         self._install_signal_handlers()
         self._prepare_shutter_event_dir()
         self._setup_display()
+        self.display_write_queue: Queue = Queue(maxsize=1)
+        self.display_writer_thread = Thread(target=self._display_writer_loop, daemon=True)
+        self.display_writer_thread.start()
         self._show_boot_screen()
         self._setup_camera()
         self._setup_buttons()
