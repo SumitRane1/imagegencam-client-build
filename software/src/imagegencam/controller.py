@@ -17,7 +17,6 @@ import shutil
 import socket
 import subprocess
 import time
-import numpy as np
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
@@ -25,7 +24,6 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Lock, Thread
 from urllib.parse import quote, unquote
-from queue import Empty, Full, Queue
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 import qrcode
@@ -242,8 +240,6 @@ class ImageGenCamController:
         self.web_app_qr_url: str | None = None
         self.font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
         self.preview_chrome_cache_key: tuple[object, ...] | None = None
-        self._combined_overlay_cache_key = None
-        self._combined_overlay_cache: Image.Image | None = None
         self.preview_chrome_cache: Image.Image | None = None
         self.battery_overlay_cache_key: tuple[int | None, bool] | None = None
         self.battery_overlay_cache: Image.Image | None = None
@@ -302,7 +298,6 @@ class ImageGenCamController:
 
         self.camera_failure: str | None = None
         self.camera_thread: Thread | None = None
-        self.display_writer_thread: Thread | None = None
         self.capture_worker_thread: Thread | None = None
         self.generation_worker_thread: Thread | None = None
         self.magic_prompt_worker_thread: Thread | None = None
@@ -315,9 +310,6 @@ class ImageGenCamController:
         self._install_signal_handlers()
         self._prepare_shutter_event_dir()
         self._setup_display()
-        self.display_write_queue: Queue = Queue(maxsize=1)
-        self.display_writer_thread = Thread(target=self._display_writer_loop, daemon=True)
-        self.display_writer_thread.start()
         self._show_boot_screen()
         self._setup_camera()
         self._setup_buttons()
@@ -958,7 +950,10 @@ class ImageGenCamController:
         viewfinder_image = self._fit_camera_for_display(image)
         if self.preview_calibration_lut is not None:
             viewfinder_image = self._apply_preview_calibration(viewfinder_image)
-        return viewfinder_image
+
+        frame = self._get_bezel_frame()
+        frame.paste(viewfinder_image, (VIEWFINDER_X0, VIEWFINDER_Y0))
+        return frame
 
     def _build_preview_calibration_lut(
         self,
@@ -1027,30 +1022,14 @@ class ImageGenCamController:
         composed = self._decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
 
-        canvas = getattr(self, "_display_canvas", None)
-        if canvas is None:
-            canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
-            self._display_canvas = canvas
+        canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
         canvas.paste(composed.convert("RGB"), (OFFSET_X, OFFSET_Y))
 
-        arr = np.asarray(canvas)
-        bgr = np.ascontiguousarray(arr[:, :, ::-1])
-        composed_bgr = Image.fromarray(bgr, "RGB")
-
+        r, g, b = canvas.split()
+        composed_bgr = Image.merge("RGB", (b, g, r))
         with self.display_lock:
             self.display.image(composed_bgr)
 
-    def _display_writer_loop(self) -> None:
-        while self.running:
-            try:
-                composed_bgr = self.display_write_queue.get(timeout=0.5)
-            except Empty:
-                continue
-            if composed_bgr is None:
-                return
-            with self.display_lock:
-                self.display.image(composed_bgr)
-    
     def _update_fps_ema(self, previous: float, delta: float) -> float:
         if delta <= 0:
             return previous
@@ -1707,23 +1686,12 @@ class ImageGenCamController:
             self.preview_chrome_cache = self._build_preview_chrome_overlay()
             self.preview_chrome_cache_key = cache_key
         return self.preview_chrome_cache
-    
-    def _get_combined_preview_overlay(self) -> Image.Image:
-        chrome_key = self._preview_chrome_key()
-        battery_key = (self.battery_percent, self.battery_charging)
-        combined_key = (chrome_key, battery_key)
-        if self._combined_overlay_cache_key == combined_key and self._combined_overlay_cache is not None:
-            return self._combined_overlay_cache
-        overlay = self._get_preview_chrome_overlay()
-        battery_overlay = self._get_battery_overlay()
-        if battery_overlay is not None:
-            overlay = Image.alpha_composite(overlay, battery_overlay)
-        self._combined_overlay_cache_key = combined_key
-        self._combined_overlay_cache = overlay
-        return overlay
 
     def _compose_preview_overlay(self, base: Image.Image) -> Image.Image:
-        composed = Image.alpha_composite(base.convert("RGBA"), self._get_combined_preview_overlay())
+        composed = Image.alpha_composite(base.convert("RGBA"), self._get_preview_chrome_overlay())
+        battery_overlay = self._get_battery_overlay()
+        if battery_overlay is not None:
+            composed = Image.alpha_composite(composed, battery_overlay)
         return composed.convert("RGB")
 
     def _render_preview_frame(self) -> None:
@@ -1997,6 +1965,7 @@ class ImageGenCamController:
         generated_path = self._current_album_path()
         if generated_path is None:
             return
+
         self.album_preload_generation += 1
         generation = self.album_preload_generation
 
@@ -2009,8 +1978,6 @@ class ImageGenCamController:
             try:
                 with Image.open(source_path) as source:
                     fitted = self._fit_generated_for_display(source.convert("RGB"))
-                    if self.preview_calibration_lut is not None:
-                        fitted = self._apply_preview_calibration(fitted)
             except Exception:
                 return
             if generation != self.album_preload_generation:
@@ -3469,9 +3436,3 @@ class ImageGenCamController:
             self._show_text_screen("ImageGenCam", "Stopped")
         except Exception:
             pass
-        try:
-            self.display_write_queue.put_nowait(None)
-        except Exception:
-            pass
-        if self.display_writer_thread and self.display_writer_thread.is_alive():
-            self.display_writer_thread.join(timeout=1.0)
