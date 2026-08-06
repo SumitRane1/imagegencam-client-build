@@ -1718,18 +1718,32 @@ class ImageGenCamController:
         max_start = max(0, total_prompts - visible_count)
         window_start = min(window_start, max_start)
         visible_prompt_ids = self.prompt_order[window_start : window_start + visible_count]
-        y = 20
+
+        left_margin = 58
+        right_margin = 20
+        box_x0 = left_margin
+        box_x1 = WIDTH - right_margin
+
+        item_height = 30
+        item_gap = 6
+        row_height = item_height + item_gap
+        block_height = visible_count * item_height + (visible_count - 1) * item_gap
+
+        top_bound = SIDE_CONTROL_TOP_Y
+        bottom_bound = SIDE_CONTROL_BOTTOM_Y + 32
+        y = top_bound + (bottom_bound - top_bound - block_height) // 2
+
+        draw = ImageDraw.Draw(screen)
         for absolute_index, button in enumerate(visible_prompt_ids, start=window_start):
             entry = self.prompt_entries[button]
-            box = (40, y, WIDTH - 42, y + 30)
+            box = (box_x0, y, box_x1, y + item_height)
             active = absolute_index == self.prompt_picker_index
             fill = (255, 255, 255) if active else (60, 60, 60)
             text_color = (0, 0, 0) if active else (255, 255, 255)
-            draw = ImageDraw.Draw(screen)
             draw.rounded_rectangle(box, radius=10, fill=fill, outline=(255, 255, 255))
             label = self._truncate_text_pixels(entry["title"], item_font, box[2] - box[0] - 18)
             draw.text((box[0] + 10, box[1] + 7), label, font=item_font, fill=text_color)
-            y += 36
+            y += row_height
 
         self._render_to_display(screen.convert("RGB"))
 
