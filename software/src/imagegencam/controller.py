@@ -2043,11 +2043,20 @@ class ImageGenCamController:
 
     def _get_wifi_connected_cached(self) -> bool:
         now = time.monotonic()
-        if now - self.wifi_last_checked_at >= 5.0:
+        if now - self.wifi_last_checked_at >= 5.0 and not getattr(self, "_wifi_check_in_progress", False):
             self.wifi_last_checked_at = now
-            self.wifi_connected_cache = bool(self._get_wifi_ssid())
+            self._wifi_check_in_progress = True
+
+            def worker() -> None:
+                try:
+                    ssid = self._get_wifi_ssid()
+                    self.wifi_connected_cache = bool(ssid and ssid != "Unknown")
+                finally:
+                    self._wifi_check_in_progress = False
+
+            Thread(target=worker, daemon=True).start()
         return self.wifi_connected_cache
-    
+        
     def _get_mac_address(self) -> str:
         for interface in ("wlan0", "eth0"):
             address_path = Path("/sys/class/net") / interface / "address"
