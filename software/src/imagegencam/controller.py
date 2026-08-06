@@ -389,7 +389,7 @@ class ImageGenCamController:
             cs=cs_pin,
             dc=dc_pin,
             rst=reset_pin,
-            baudrate=31250000,
+            baudrate=24000000,
             width=PANEL_WIDTH,
             height=PANEL_HEIGHT,
         )
@@ -958,10 +958,7 @@ class ImageGenCamController:
         viewfinder_image = self._fit_camera_for_display(image)
         if self.preview_calibration_lut is not None:
             viewfinder_image = self._apply_preview_calibration(viewfinder_image)
-
-        frame = self._get_bezel_frame()
-        frame.paste(viewfinder_image, (VIEWFINDER_X0, VIEWFINDER_Y0))
-        return frame
+        return viewfinder_image
 
     def _build_preview_calibration_lut(
         self,
