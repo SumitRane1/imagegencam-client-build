@@ -49,6 +49,8 @@ VIEWFINDER_Y0 = 0
 VIEWFINDER_X1 = WIDTH  # 272
 VIEWFINDER_Y1 = HEIGHT  # 240
 
+UI_UP_LONG_PRESS_SECONDS = 3.0
+
 PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 12.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
@@ -453,14 +455,26 @@ class ImageGenCamController:
             26: "shutter",
         }
         self.gpio_buttons = {}
+        self._ui_up_long_press_fired = False
         try:
             from gpiozero import Device, Button
             from gpiozero.pins.lgpio import LGPIOFactory
 
             Device.pin_factory = LGPIOFactory()
             for pin, action in self.button_lookup.items():
-                btn = Button(pin, pull_up=True, bounce_time=0.05)
-                btn.when_pressed = self._make_gpio_button_handler(action)
+                if action == "ui_up":
+                    btn = Button(
+                        pin,
+                        pull_up=True,
+                        bounce_time=0.05,
+                        hold_time=UI_UP_LONG_PRESS_SECONDS,
+                        hold_repeat=False,
+                    )
+                    btn.when_held = self._handle_ui_up_long_press
+                    btn.when_released = self._handle_ui_up_released
+                else:
+                    btn = Button(pin, pull_up=True, bounce_time=0.05)
+                    btn.when_pressed = self._make_gpio_button_handler(action)
                 self.gpio_buttons[pin] = btn
             logger.info("GPIO buttons initialized: %s", self.button_lookup)
         except Exception:
@@ -468,6 +482,16 @@ class ImageGenCamController:
 
         self.keyboard_thread = Thread(target=self.keyboard_input_loop, daemon=True)
         self.keyboard_thread.start()
+
+    def _handle_ui_up_long_press(self) -> None:
+        self._ui_up_long_press_fired = True
+        self._queue_ui_event("diagnostics_hold")
+
+    def _handle_ui_up_released(self) -> None:
+        if self._ui_up_long_press_fired:
+            self._ui_up_long_press_fired = False
+            return
+        self._queue_ui_event("ui_up")
 
     def _make_gpio_button_handler(self, action: str):
         def handler() -> None:
@@ -3092,16 +3116,8 @@ class ImageGenCamController:
         self._start_wifi_connection(self.wifi_selected_network, self.wifi_password)
 
     def _maybe_trigger_diagnostics(self, event: str, mode: str) -> bool:
-        if mode != "preview" or event != "ui_up":
+        if mode != "preview" or event != "diagnostics_hold":
             return False
-        now = time.monotonic()
-        self.diagnostics_tap_times = [
-            stamp for stamp in self.diagnostics_tap_times if (now - stamp) < 1.2
-        ]
-        self.diagnostics_tap_times.append(now)
-        if len(self.diagnostics_tap_times) < 3:
-            return False
-        self.diagnostics_tap_times.clear()
         self._enter_diagnostics()
         return True
 
