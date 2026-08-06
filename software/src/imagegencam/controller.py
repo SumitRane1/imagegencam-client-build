@@ -17,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import time
+import numpy as np
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
@@ -240,6 +241,8 @@ class ImageGenCamController:
         self.web_app_qr_url: str | None = None
         self.font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
         self.preview_chrome_cache_key: tuple[object, ...] | None = None
+        self._combined_overlay_cache_key = None
+        self._combined_overlay_cache: Image.Image | None = None
         self.preview_chrome_cache: Image.Image | None = None
         self.battery_overlay_cache_key: tuple[int | None, bool] | None = None
         self.battery_overlay_cache: Image.Image | None = None
@@ -381,7 +384,7 @@ class ImageGenCamController:
             cs=cs_pin,
             dc=dc_pin,
             rst=reset_pin,
-            baudrate=24000000,
+            baudrate=31250000,
             width=PANEL_WIDTH,
             height=PANEL_HEIGHT,
         )
@@ -1022,11 +1025,16 @@ class ImageGenCamController:
         composed = self._decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
 
-        canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
+        canvas = getattr(self, "_display_canvas", None)
+        if canvas is None:
+            canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
+            self._display_canvas = canvas
         canvas.paste(composed.convert("RGB"), (OFFSET_X, OFFSET_Y))
 
-        r, g, b = canvas.split()
-        composed_bgr = Image.merge("RGB", (b, g, r))
+        arr = np.asarray(canvas)
+        bgr = np.ascontiguousarray(arr[:, :, ::-1])
+        composed_bgr = Image.fromarray(bgr, "RGB")
+
         with self.display_lock:
             self.display.image(composed_bgr)
 
@@ -1686,12 +1694,23 @@ class ImageGenCamController:
             self.preview_chrome_cache = self._build_preview_chrome_overlay()
             self.preview_chrome_cache_key = cache_key
         return self.preview_chrome_cache
-
-    def _compose_preview_overlay(self, base: Image.Image) -> Image.Image:
-        composed = Image.alpha_composite(base.convert("RGBA"), self._get_preview_chrome_overlay())
+    
+    def _get_combined_preview_overlay(self) -> Image.Image:
+        chrome_key = self._preview_chrome_key()
+        battery_key = (self.battery_percent, self.battery_charging)
+        combined_key = (chrome_key, battery_key)
+        if self._combined_overlay_cache_key == combined_key and self._combined_overlay_cache is not None:
+            return self._combined_overlay_cache
+        overlay = self._get_preview_chrome_overlay()
         battery_overlay = self._get_battery_overlay()
         if battery_overlay is not None:
-            composed = Image.alpha_composite(composed, battery_overlay)
+            overlay = Image.alpha_composite(overlay, battery_overlay)
+        self._combined_overlay_cache_key = combined_key
+        self._combined_overlay_cache = overlay
+        return overlay
+
+    def _compose_preview_overlay(self, base: Image.Image) -> Image.Image:
+        composed = Image.alpha_composite(base.convert("RGBA"), self._get_combined_preview_overlay())
         return composed.convert("RGB")
 
     def _render_preview_frame(self) -> None:
@@ -1965,7 +1984,6 @@ class ImageGenCamController:
         generated_path = self._current_album_path()
         if generated_path is None:
             return
-
         self.album_preload_generation += 1
         generation = self.album_preload_generation
 
@@ -1978,6 +1996,8 @@ class ImageGenCamController:
             try:
                 with Image.open(source_path) as source:
                     fitted = self._fit_generated_for_display(source.convert("RGB"))
+                    if self.preview_calibration_lut is not None:
+                        fitted = self._apply_preview_calibration(fitted)
             except Exception:
                 return
             if generation != self.album_preload_generation:
