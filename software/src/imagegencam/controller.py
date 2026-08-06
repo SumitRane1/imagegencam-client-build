@@ -25,6 +25,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Lock, Thread
 from urllib.parse import quote, unquote
+from queue import Empty, Full, Queue
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 import qrcode
@@ -301,6 +302,9 @@ class ImageGenCamController:
 
         self.camera_failure: str | None = None
         self.camera_thread: Thread | None = None
+        self.display_write_queue: Queue = Queue(maxsize=1)
+        self.display_writer_thread = Thread(target=self._display_writer_loop, daemon=True)
+        self.display_writer_thread.start()
         self.capture_worker_thread: Thread | None = None
         self.generation_worker_thread: Thread | None = None
         self.magic_prompt_worker_thread: Thread | None = None
@@ -1035,9 +1039,26 @@ class ImageGenCamController:
         bgr = np.ascontiguousarray(arr[:, :, ::-1])
         composed_bgr = Image.fromarray(bgr, "RGB")
 
-        with self.display_lock:
-            self.display.image(composed_bgr)
+        try:
+            self.display_write_queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            self.display_write_queue.put_nowait(composed_bgr)
+        except Full:
+            pass
 
+    def _display_writer_loop(self) -> None:
+        while self.running:
+            try:
+                composed_bgr = self.display_write_queue.get(timeout=0.5)
+            except Empty:
+                continue
+            if composed_bgr is None:
+                return
+            with self.display_lock:
+                self.display.image(composed_bgr)
+    
     def _update_fps_ema(self, previous: float, delta: float) -> float:
         if delta <= 0:
             return previous
@@ -3456,3 +3477,9 @@ class ImageGenCamController:
             self._show_text_screen("ImageGenCam", "Stopped")
         except Exception:
             pass
+        try:
+            self.display_write_queue.put_nowait(None)
+        except Exception:
+            pass
+        if self.display_writer_thread and self.display_writer_thread.is_alive():
+            self.display_writer_thread.join(timeout=1.0)
