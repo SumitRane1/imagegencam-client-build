@@ -252,6 +252,7 @@ class ImageGenCamController:
         self.battery_overlay_cache: Image.Image | None = None
         self.wifi_connected_cache: bool = False
         self.wifi_last_checked_at: float = 0.0
+        self.wifi_ssid_cache: str = "Unknown"
         self.ready_unseen_count = 0
         self.wifi_manager = NetworkManagerWifi()
         self.wifi_networks: list[WifiNetwork] = []
@@ -2116,12 +2117,17 @@ class ImageGenCamController:
             def worker() -> None:
                 try:
                     ssid = self._get_wifi_ssid()
+                    self.wifi_ssid_cache = ssid
                     self.wifi_connected_cache = bool(ssid and ssid != "Unknown")
                 finally:
                     self._wifi_check_in_progress = False
 
             Thread(target=worker, daemon=True).start()
         return self.wifi_connected_cache
+
+    def _get_wifi_ssid_cached(self) -> str:
+        self._get_wifi_connected_cached()
+        return self.wifi_ssid_cache
         
     def _get_mac_address(self) -> str:
         for interface in ("wlan0", "eth0"):
@@ -2203,7 +2209,7 @@ class ImageGenCamController:
 
         draw.text((content_x0, 26), "Phone app", font=title_font, fill=(18, 18, 18))
 
-        ssid = self._get_wifi_ssid()
+        ssid = self._get_wifi_ssid_cached()
         short_url = self._get_short_app_url().replace("http://", "")
 
         draw.text((content_x0, 48), "NETWORK", font=label_font, fill=(120, 120, 120))
@@ -2249,7 +2255,7 @@ class ImageGenCamController:
         cpu_value = self._refresh_cpu_usage()
         ip_value = base_url.replace("http://", "").rstrip("/").split(":", 1)[0]
         labels = [
-            ("Wi-Fi", self._get_wifi_ssid()),
+            ("Wi-Fi", self._get_wifi_ssid_cached()),
             ("IP", ip_value),
             ("MAC", self._get_mac_address()),
             ("CPU", f"{cpu_value}%" if cpu_value is not None else "--"),
@@ -2283,7 +2289,7 @@ class ImageGenCamController:
         item_font = self._load_font(12)
         meta_font = self._load_font(10)
         draw.text((68, 26), "Wi-Fi", font=title_font, fill=(18, 18, 18))
-        draw.text((120, 29), self._truncate_text_pixels(self._get_wifi_ssid(), meta_font, 120), font=meta_font, fill=(60, 60, 60))
+        draw.text((120, 29), self._truncate_text_pixels(self._get_wifi_ssid_cached(), meta_font, 120), font=meta_font, fill=(60, 60, 60))
 
         if not self.wifi_networks:
             draw.text((74, 96), "No networks found", font=item_font, fill=(18, 18, 18))
@@ -2464,7 +2470,7 @@ class ImageGenCamController:
         if self.wifi_pending_rollback:
             seconds_left = max(0, int(self.wifi_pending_rollback.expires_at - time.monotonic()))
         draw.text((40, 46), "Wi-Fi changed", font=title_font, fill=(255, 255, 255))
-        draw.text((40, 70), self._truncate_text_pixels(self._get_wifi_ssid(), body_font, 150), font=body_font, fill=(255, 255, 255))
+        draw.text((40, 70), self._truncate_text_pixels(self._get_wifi_ssid_cached(), body_font, 150), font=body_font, fill=(255, 255, 255))
         draw.text((40, 90), "Press KEEP if this works.", font=body_font, fill=(200, 200, 200))
         draw.text((40, 108), f"Auto-rollback in {seconds_left}s", font=meta_font, fill=(200, 200, 200))
         self._render_to_display(screen.convert("RGB"))
