@@ -453,6 +453,7 @@ class ImageGenCamController:
             13: "ui_prompt",
             19: "ui_album",
             26: "shutter",
+            21: "magic_restyle",
         }
         self.gpio_buttons = {}
         self._ui_up_long_press_fired = False
@@ -642,6 +643,17 @@ class ImageGenCamController:
                 {"id": prompt_id, "title": entry["title"], "body": entry["body"]}
                 for prompt_id, entry in self.prompt_entries.items()
             ]
+
+    def _pick_random_style_prompt(self, exclude_button: str | None = None) -> dict[str, str]:
+        import random
+        candidates = [
+            {"id": button, "title": entry["title"], "body": entry["body"]}
+            for button, entry in self.prompt_entries.items()
+            if button != exclude_button
+        ]
+        if not candidates:
+            candidates = self.get_prompt_entries()
+        return random.choice(candidates)
 
     def _load_latest_magic_prompt(self) -> MagicPromptState | None:
         if not self.magic_history:
@@ -2740,6 +2752,47 @@ class ImageGenCamController:
             self.state.status_message = f"{prompt_entry['title']} queued"
         self.preview_overlay_dirty = True
 
+    def _enqueue_album_magic_restyle(self) -> None:
+        generated_path = self._current_album_path()
+        if generated_path is None:
+            return
+        source_path = self._find_capture_for_generated(generated_path)
+        if source_path is None:
+            with self.state_lock:
+                self.state.status_message = "Original photo not found."
+            return
+
+        metadata = self._read_generation_metadata(generated_path)
+        original_button = str(metadata.get("prompt_button") or "") or None
+        style = self._pick_random_style_prompt(exclude_button=original_button)
+
+        with self.state_lock:
+            pending_jobs = self.state.pending_jobs
+        if self.max_pending_generations and pending_jobs >= self.max_pending_generations:
+            with self.state_lock:
+                self.state.status_message = "Queue full. Wait for album."
+            return
+
+        new_generated_path = self._save_generated_path(style["id"])
+        job = GenerationJob(
+            prompt_button=style["id"],
+            prompt_title=style["title"],
+            prompt_body=style["body"],
+            capture_path=source_path,
+            generated_path=new_generated_path,
+        )
+        with self.state_lock:
+            self.state.last_error = None
+            self.state.pending_jobs += 1
+            self.state.status_message = f"Restyling with {style['title']}..."
+        self._save_generation_job(job)
+
+        stale = self._get_album_display_image() or self._get_album_source_display_image()
+        self._prepare_capture_feedback(stale)
+        with self.state_lock:
+            self.state.mode = "capture_feedback"
+        self.preview_overlay_dirty = True
+
     def _capture_worker_loop(self) -> None:
         while self.running:
             try:
@@ -3162,6 +3215,11 @@ class ImageGenCamController:
 
     def _handle_event(self, event: str) -> None:
         mode = self.get_status_snapshot()["mode"]
+        
+        if event == "magic_restyle":
+            if mode == "album":
+                self._enqueue_album_magic_restyle()
+            return
 
         if event == "magic_shutter":
             if mode in {"preview", "capture_feedback"}:
