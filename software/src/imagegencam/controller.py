@@ -405,7 +405,7 @@ class ImageGenCamController:
         self.pisugar_power_button_last_state = pressed
         self.pisugar_power_button_available = True
 
-        def _setup_display(self) -> None:
+    def _setup_display(self) -> None:
             fb_path = os.environ.get("DISPLAY_FB_DEVICE", "/dev/fb1")
             self.fb_file = open(fb_path, "r+b", buffering=0)
             self.display = _FramebufferDisplay(self.fb_file, PANEL_WIDTH, PANEL_HEIGHT)
