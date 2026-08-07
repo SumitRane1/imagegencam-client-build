@@ -206,8 +206,11 @@ class ImageGenCamController:
         self.magic_prompt_queue: Queue[MagicSeedRequest | None] = Queue()
         self.latest_frame_lock = Lock()
         self.display_lock = Lock()
+        self.display_write_queue: Queue[Image.Image] = Queue(maxsize=1)
+        self.display_writer_thread: Thread | None = None
         self.camera_access_lock = Lock()
         self.image_edit_lock = Lock()
+        self._display_canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
 
         self.latest_preview_frame: Image.Image | None = None
         self.latest_display_frame: Image.Image | None = None
@@ -243,6 +246,8 @@ class ImageGenCamController:
         self.font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
         self.preview_chrome_cache_key: tuple[object, ...] | None = None
         self.preview_chrome_cache: Image.Image | None = None
+        self._combined_overlay_cache_key = None
+        self._combined_overlay_cache: Image.Image | None = None
         self.battery_overlay_cache_key: tuple[int | None, bool] | None = None
         self.battery_overlay_cache: Image.Image | None = None
         self.wifi_connected_cache: bool = False
@@ -314,6 +319,8 @@ class ImageGenCamController:
         self._setup_display()
         self._show_boot_screen()
         self._setup_camera()
+        self.display_writer_thread = Thread(target=self._display_writer_loop, daemon=True)
+        self.display_writer_thread.start()
         self._setup_buttons()
         self._setup_pisugar_battery_bus()
         self.pisugar_shortcut_button_configured = self._configure_pisugar_shortcut_button()
@@ -383,7 +390,7 @@ class ImageGenCamController:
             cs=cs_pin,
             dc=dc_pin,
             rst=reset_pin,
-            baudrate=24000000,
+            baudrate=31250000,
             width=PANEL_WIDTH,
             height=PANEL_HEIGHT,
         )
@@ -986,10 +993,7 @@ class ImageGenCamController:
         viewfinder_image = self._fit_camera_for_display(image)
         if self.preview_calibration_lut is not None:
             viewfinder_image = self._apply_preview_calibration(viewfinder_image)
-
-        frame = self._get_bezel_frame()
-        frame.paste(viewfinder_image, (VIEWFINDER_X0, VIEWFINDER_Y0))
-        return frame
+        return viewfinder_image
 
     def _build_preview_calibration_lut(
         self,
@@ -1052,19 +1056,37 @@ class ImageGenCamController:
         image.save(buffer, format="JPEG", quality=45, optimize=False)
         return buffer.getvalue()
 
+    def _display_writer_loop(self) -> None:
+        while self.running:
+            try:
+                frame = self.display_write_queue.get(timeout=0.25)
+            except Empty:
+                continue
+            if frame is None:
+                return
+            try:
+                with self.display_lock:
+                    self.display.image(frame)
+            except Exception:
+                logger.exception("Display write failed")
+
     def _render_to_display(self, image: Image.Image, *, decorate_battery: bool = True) -> None:
         self.current_display_image = image
         self._record_display_frame(time.monotonic())
         composed = self._decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
 
-        canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
+        canvas = self._display_canvas
         canvas.paste(composed.convert("RGB"), (OFFSET_X, OFFSET_Y))
 
-        r, g, b = canvas.split()
-        composed_bgr = Image.merge("RGB", (b, g, r))
-        with self.display_lock:
-            self.display.image(composed_bgr)
+        import numpy as np
+        composed_bgr = Image.fromarray(np.asarray(canvas)[:, :, ::-1], "RGB")
+
+        try:
+            self.display_write_queue.get_nowait()
+        except Empty:
+            pass
+        self.display_write_queue.put_nowait(composed_bgr)
 
     def _update_fps_ema(self, previous: float, delta: float) -> float:
         if delta <= 0:
@@ -1724,11 +1746,19 @@ class ImageGenCamController:
         return self.preview_chrome_cache
 
     def _compose_preview_overlay(self, base: Image.Image) -> Image.Image:
-        composed = Image.alpha_composite(base.convert("RGBA"), self._get_preview_chrome_overlay())
+        chrome_key = self._preview_chrome_key()
         battery_overlay = self._get_battery_overlay()
-        if battery_overlay is not None:
-            composed = Image.alpha_composite(composed, battery_overlay)
-        return composed.convert("RGB")
+        battery_key = self.battery_overlay_cache_key
+        combined_key = (chrome_key, battery_key)
+
+        if getattr(self, "_combined_overlay_cache_key", None) != combined_key or self._combined_overlay_cache is None:
+            overlay = self._get_preview_chrome_overlay()
+            if battery_overlay is not None:
+                overlay = Image.alpha_composite(overlay, battery_overlay)
+            self._combined_overlay_cache = overlay
+            self._combined_overlay_cache_key = combined_key
+
+        return Image.alpha_composite(base.convert("RGBA"), self._combined_overlay_cache).convert("RGB")
 
     def _render_preview_frame(self) -> None:
         with self.latest_frame_lock:
@@ -3503,6 +3533,10 @@ class ImageGenCamController:
         self.running = False
         try:
             self.capture_queue.put_nowait(None)
+        except Exception:
+            pass
+        try:
+            self.display_write_queue.put_nowait(None)
         except Exception:
             pass
         try:
