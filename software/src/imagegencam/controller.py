@@ -238,6 +238,8 @@ class ImageGenCamController:
         self.album_cached_image: Image.Image | None = None
         self.album_source_cached_path: Path | None = None
         self.album_source_cached_image: Image.Image | None = None
+        self.album_display_stale_image: Image.Image | None = None
+        self._album_display_loading_path: Path | None = None
         self.album_qr_cached_path: Path | None = None
         self.album_qr_cached_image: Image.Image | None = None
         self.album_qr_cached_url: str | None = None
@@ -1873,26 +1875,39 @@ class ImageGenCamController:
         if path is None:
             return None
         if self.album_cached_path == path and self.album_cached_image is not None:
+            self.album_display_stale_image = self.album_cached_image
             return self.album_cached_image.copy()
 
-        try:
-            with Image.open(path) as source:
-                fitted = self._fit_generated_for_display(source.convert("RGB"))
-                if self.preview_calibration_lut is not None:
-                    fitted = self._apply_preview_calibration(fitted)
-        except Exception:
-            logger.exception("Failed to load album image %s", path)
-            self.gallery_paths = [candidate for candidate in self.gallery_paths if candidate != path]
-            self._invalidate_album_cache()
-            if not self.gallery_paths:
-                self.album_index = 0
-                return None
-            self.album_index = min(self.album_index, len(self.gallery_paths) - 1)
-            return self._get_album_display_image()
+        self._start_album_display_preload(path)
+        if self.album_display_stale_image is not None:
+            return self.album_display_stale_image.copy()
+        return None
 
-        self.album_cached_path = path
-        self.album_cached_image = fitted
-        return fitted.copy()
+    def _start_album_display_preload(self, path: Path) -> None:
+        if self._album_display_loading_path == path:
+            return
+        self._album_display_loading_path = path
+
+        def worker() -> None:
+            try:
+                with Image.open(path) as source:
+                    fitted = self._fit_generated_for_display(source.convert("RGB"))
+                    if self.preview_calibration_lut is not None:
+                        fitted = self._apply_preview_calibration(fitted)
+            except Exception:
+                logger.exception("Failed to preload album image %s", path)
+                self._album_display_loading_path = None
+                return
+            if self._current_album_path() != path:
+                self._album_display_loading_path = None
+                return
+            self.album_cached_path = path
+            self.album_cached_image = fitted
+            self.album_display_stale_image = fitted
+            self._album_display_loading_path = None
+            self.last_drawn_mode = None
+
+        Thread(target=worker, daemon=True).start()
 
     def _get_generated_metadata_path(self, generated_path: Path) -> Path:
         return Path(f"{generated_path}.json")
@@ -3024,7 +3039,6 @@ class ImageGenCamController:
         self.preview_overlay_dirty = True
 
     def _enter_album(self) -> None:
-        self.gallery_paths = self._load_generated_gallery_paths()
         self.album_index = 0
         self.album_show_source = False
         self.ready_unseen_count = 0
