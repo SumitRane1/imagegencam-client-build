@@ -66,6 +66,34 @@ SHUTTER_EVENT_DIR = Path("/tmp/imagegencam-shutter-events")
 WIFI_KEYBOARD_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!?#@$%&*/: "
 logger = logging.getLogger(__name__)
 
+class _FramebufferDisplay:
+    """Drop-in replacement for the old adafruit_rgb_display object.
+
+    Converts PIL RGB images to RGB565 and writes them straight into the
+    panel-mipi-dbi framebuffer device (e.g. /dev/fb1).
+    """
+
+    def __init__(self, fb_file, width: int, height: int) -> None:
+        self.fb_file = fb_file
+        self.width = width
+        self.height = height
+
+    def image(self, img: Image.Image) -> None:
+        import numpy as np
+
+        if img.size != (self.width, self.height):
+            img = img.resize((self.width, self.height))
+        arr = np.asarray(img.convert("RGB"), dtype=np.uint16)
+        r = (arr[:, :, 0] & 0xF8) << 8
+        g = (arr[:, :, 1] & 0xFC) << 3
+        b = (arr[:, :, 2] & 0xF8) >> 3
+        rgb565 = (r | g | b).astype("<u2")
+        try:
+            self.fb_file.seek(0)
+            self.fb_file.write(rgb565.tobytes())
+        except OSError:
+            logger.exception("Framebuffer write failed")
+
 
 @dataclass
 class RuntimeState:
@@ -377,28 +405,12 @@ class ImageGenCamController:
         self.pisugar_power_button_last_state = pressed
         self.pisugar_power_button_available = True
 
-    def _setup_display(self) -> None:
-        import board
-        import busio
-        import digitalio
-        from adafruit_rgb_display import ili9341
-
-        cs_pin = digitalio.DigitalInOut(board.CE0)
-        dc_pin = digitalio.DigitalInOut(board.D24)
-        reset_pin = digitalio.DigitalInOut(board.D25)
-        spi = busio.SPI(clock=board.SCK, MOSI=board.MOSI, MISO=board.MISO)
-
-        self.display = ili9341.ILI9341(
-            spi,
-            cs=cs_pin,
-            dc=dc_pin,
-            rst=reset_pin,
-            baudrate=31250000,
-            width=PANEL_WIDTH,
-            height=PANEL_HEIGHT,
-        )
-        self.buffer = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT))
-
+        def _setup_display(self) -> None:
+            fb_path = os.environ.get("DISPLAY_FB_DEVICE", "/dev/fb1")
+            self.fb_file = open(fb_path, "r+b", buffering=0)
+            self.display = _FramebufferDisplay(self.fb_file, PANEL_WIDTH, PANEL_HEIGHT)
+            self.buffer = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT))
+            
     def _setup_camera(self) -> None:
         from picamera2 import Picamera2
 
@@ -1082,11 +1094,8 @@ class ImageGenCamController:
         canvas = self._display_canvas
         canvas.paste(composed.convert("RGB"), (OFFSET_X, OFFSET_Y))
 
-        import numpy as np
-        composed_bgr = Image.fromarray(np.asarray(canvas)[:, :, ::-1], "RGB")
-
         with self.display_lock:
-            self.display.image(composed_bgr)
+            self.display.image(canvas)
 
     def _update_fps_ema(self, previous: float, delta: float) -> float:
         if delta <= 0:
