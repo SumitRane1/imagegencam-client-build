@@ -84,9 +84,9 @@ class _FramebufferDisplay:
         if img.size != (self.width, self.height):
             img = img.resize((self.width, self.height))
         arr = np.asarray(img.convert("RGB"), dtype=np.uint16)
-        r = (arr[:, :, 0] & 0xF8) << 8
+        r = (arr[:, :, 2] & 0xF8) << 8
         g = (arr[:, :, 1] & 0xFC) << 3
-        b = (arr[:, :, 2] & 0xF8) >> 3
+        b = (arr[:, :, 0] & 0xF8) >> 3
         rgb565 = (r | g | b).astype("<u2")
         try:
             self.fb_file.seek(0)
