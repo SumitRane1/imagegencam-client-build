@@ -1085,11 +1085,8 @@ class ImageGenCamController:
         import numpy as np
         composed_bgr = Image.fromarray(np.asarray(canvas)[:, :, ::-1], "RGB")
 
-        try:
-            self.display_write_queue.get_nowait()
-        except Empty:
-            pass
-        self.display_write_queue.put_nowait(composed_bgr)
+        with self.display_lock:
+            self.display.image(composed_bgr)
 
     def _update_fps_ema(self, previous: float, delta: float) -> float:
         if delta <= 0:
