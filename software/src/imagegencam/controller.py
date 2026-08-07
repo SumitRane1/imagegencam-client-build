@@ -34,28 +34,20 @@ from .openai_client import OpenAIImageEditor, OpenAIImageError, OpenAIMagicPromp
 from .wifi_manager import NetworkManagerWifi, WifiNetwork, WifiRollback
 
 
-PANEL_WIDTH = 320
-PANEL_HEIGHT = 240
-WIDTH = 272
+WIDTH = 320
 HEIGHT = 240
-OFFSET_X = 6
-OFFSET_Y = 0
-SIDE_CONTROL_TOP_Y = 50
-SIDE_CONTROL_BOTTOM_Y = HEIGHT - 78  # 162
-VIEWFINDER_WIDTH = WIDTH  # 272, fills the full visible cutout
-VIEWFINDER_HEIGHT = HEIGHT  # 240
-VIEWFINDER_X0 = 0
-VIEWFINDER_Y0 = 0
-VIEWFINDER_X1 = WIDTH  # 272
-VIEWFINDER_Y1 = HEIGHT  # 240
-
-UI_UP_LONG_PRESS_SECONDS = 3.0
-
+SIDE_CONTROL_TOP_Y = 64
+SIDE_CONTROL_BOTTOM_Y = HEIGHT - 98
+VIEWFINDER_WIDTH = 200
+VIEWFINDER_HEIGHT = 150
+VIEWFINDER_X0 = (WIDTH - VIEWFINDER_WIDTH) // 2      # 60
+VIEWFINDER_Y0 = 40
+VIEWFINDER_X1 = VIEWFINDER_X0 + VIEWFINDER_WIDTH      # 260
+VIEWFINDER_Y1 = VIEWFINDER_Y0 + VIEWFINDER_HEIGHT     # 190
 PREVIEW_REDRAW_INTERVAL_SECONDS = 1.0 / 12.0
 MENU_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 ALBUM_REDRAW_INTERVAL_SECONDS = 1.0 / 8.0
 BATTERY_REFRESH_INTERVAL_SECONDS = 20.0
-IDLE_BLANK_TIMEOUT_SECONDS = 60.0
 PISUGAR_POWER_BUTTON_POLL_INTERVAL_SECONDS = 0.02
 PISUGAR_POWER_BUTTON_MAX_SHUTTER_PRESS_SECONDS = 0.6
 QUEUE_RETRY_BASE_SECONDS = 15.0
@@ -304,10 +296,6 @@ class ImageGenCamController:
         self.generation_worker_thread: Thread | None = None
         self.magic_prompt_worker_thread: Thread | None = None
         self.running = True
-        
-        self.last_activity_at = time.monotonic()
-        self.screen_blanked = False
-        self.camera_paused = False
 
         self._install_signal_handlers()
         self._prepare_shutter_event_dir()
@@ -384,10 +372,10 @@ class ImageGenCamController:
             dc=dc_pin,
             rst=reset_pin,
             baudrate=24000000,
-            width=PANEL_WIDTH,
-            height=PANEL_HEIGHT,
+            width=WIDTH,
+            height=HEIGHT,
         )
-        self.buffer = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT))
+        self.buffer = Image.new("RGB", (WIDTH, HEIGHT))
 
     def _setup_camera(self) -> None:
         from picamera2 import Picamera2
@@ -398,10 +386,6 @@ class ImageGenCamController:
             controls={"FrameRate": self.frame_rate},
             buffer_count=2,
         )
-        self.still_camera_config = self.picam2.create_still_configuration(
-            main={"size": (2592, 1944), "format": "RGB888"},
-            buffer_count=1,
-        )
         self.picam2.configure(self.preview_camera_config)
         self.picam2.start()
         time.sleep(1.0)
@@ -410,9 +394,6 @@ class ImageGenCamController:
 
     def _camera_capture_loop(self) -> None:
         while self.running:
-            if self.camera_paused:
-                time.sleep(0.1)
-                continue
             try:
                 with self.camera_access_lock:
                     frame_array = self.picam2.capture_array("main")
@@ -430,77 +411,12 @@ class ImageGenCamController:
                 self._fail_fast_camera_restart(self.camera_failure)
                 return
 
-    def _capture_high_res_still(self) -> Image.Image:
-        with self.camera_access_lock:
-            request = self.picam2.switch_mode_and_capture_request(self.still_camera_config)
-            try:
-                array = request.make_array("main")
-            finally:
-                request.release()
-            self.picam2.switch_mode(self.preview_camera_config)
-        if self.swap_red_blue:
-            array = array[:, :, ::-1]
-        return Image.fromarray(array, "RGB")
-    
     def _setup_buttons(self) -> None:
         self.use_button_polling = False
         self.button_pins = ()
         self.button_last_states = {}
-
-        self.button_lookup = {
-            5: "ui_up",
-            6: "ui_down",
-            13: "ui_prompt",
-            19: "ui_album",
-            26: "shutter",
-            21: "magic_restyle",
-        }
-        self.gpio_buttons = {}
-        self._ui_up_long_press_fired = False
-        try:
-            from gpiozero import Device, Button
-            from gpiozero.pins.lgpio import LGPIOFactory
-
-            Device.pin_factory = LGPIOFactory()
-            for pin, action in self.button_lookup.items():
-                if action == "ui_up":
-                    btn = Button(
-                        pin,
-                        pull_up=True,
-                        bounce_time=0.05,
-                        hold_time=UI_UP_LONG_PRESS_SECONDS,
-                        hold_repeat=False,
-                    )
-                    btn.when_held = self._handle_ui_up_long_press
-                    btn.when_released = self._handle_ui_up_released
-                else:
-                    btn = Button(pin, pull_up=True, bounce_time=0.05)
-                    btn.when_pressed = self._make_gpio_button_handler(action)
-                self.gpio_buttons[pin] = btn
-            logger.info("GPIO buttons initialized: %s", self.button_lookup)
-        except Exception:
-            logger.exception("GPIO button setup failed; falling back to keyboard input only")
-
         self.keyboard_thread = Thread(target=self.keyboard_input_loop, daemon=True)
         self.keyboard_thread.start()
-
-    def _handle_ui_up_long_press(self) -> None:
-        self._ui_up_long_press_fired = True
-        self._queue_ui_event("diagnostics_hold")
-
-    def _handle_ui_up_released(self) -> None:
-        if self._ui_up_long_press_fired:
-            self._ui_up_long_press_fired = False
-            return
-        self._queue_ui_event("ui_up")
-
-    def _make_gpio_button_handler(self, action: str):
-        def handler() -> None:
-            if action == "shutter":
-                self._queue_shutter_event("shutter")
-            else:
-                self._queue_ui_event(action)
-        return handler
 
     def keyboard_input_loop(self) -> None:
         import sys
@@ -536,7 +452,6 @@ class ImageGenCamController:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def _queue_ui_event(self, action: str) -> None:
-        self.last_activity_at = time.monotonic()
         now = time.monotonic()
         if now - self.last_ui_press_time < 0.11:
             return
@@ -544,7 +459,6 @@ class ImageGenCamController:
         self.event_queue.put(action)
 
     def _queue_shutter_event(self, event_name: str = "shutter") -> None:
-        self.last_activity_at = time.monotonic()
         now = time.monotonic()
         last_seen_at = self.last_shutter_event_times.get(event_name, 0.0)
         if now - last_seen_at < 0.125:
@@ -643,17 +557,6 @@ class ImageGenCamController:
                 {"id": prompt_id, "title": entry["title"], "body": entry["body"]}
                 for prompt_id, entry in self.prompt_entries.items()
             ]
-
-    def _pick_random_style_prompt(self, exclude_button: str | None = None) -> dict[str, str]:
-        import random
-        candidates = [
-            {"id": button, "title": entry["title"], "body": entry["body"]}
-            for button, entry in self.prompt_entries.items()
-            if button != exclude_button
-        ]
-        if not candidates:
-            candidates = self.get_prompt_entries()
-        return random.choice(candidates)
 
     def _load_latest_magic_prompt(self) -> MagicPromptState | None:
         if not self.magic_history:
@@ -974,13 +877,8 @@ class ImageGenCamController:
         return img.resize(self.generation_input_size, Image.Resampling.BILINEAR)
 
     def _fit_generated_for_display(self, image: Image.Image) -> Image.Image:
-        img = image.convert("RGB")
-        fitted = ImageOps.contain(img, (WIDTH, HEIGHT), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
-        x = (WIDTH - fitted.width) // 2
-        y = (HEIGHT - fitted.height) // 2
-        canvas.paste(fitted, (x, y))
-        return canvas
+        img = self._crop_to_display_ratio(image)
+        return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
     def _build_display_preview_frame(self, image: Image.Image) -> Image.Image:
         viewfinder_image = self._fit_camera_for_display(image)
@@ -1057,11 +955,7 @@ class ImageGenCamController:
         self._record_display_frame(time.monotonic())
         composed = self._decorate_with_battery(image) if decorate_battery else image
         self.last_composed_display_image = composed
-
-        canvas = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
-        canvas.paste(composed.convert("RGB"), (OFFSET_X, OFFSET_Y))
-
-        r, g, b = canvas.split()
+        r, g, b = composed.convert("RGB").split()
         composed_bgr = Image.merge("RGB", (b, g, r))
         with self.display_lock:
             self.display.image(composed_bgr)
@@ -1218,8 +1112,8 @@ class ImageGenCamController:
     def _show_text_screen(self, title: str, subtitle: str = "", fill=(255, 255, 255)) -> None:
         screen = Image.new("RGB", (WIDTH, HEIGHT), fill)
         draw = ImageDraw.Draw(screen)
-        title_font = self._load_font(21)
-        body_font = self._load_font(14)
+        title_font = self._load_font(28)
+        body_font = self._load_font(18)
         draw.text((12, 18), title[:24], font=title_font, fill=(0, 0, 0))
         if subtitle:
             lines = self._wrap_text_pixels(subtitle, body_font, WIDTH - 24)
@@ -1395,7 +1289,7 @@ class ImageGenCamController:
 
         bezel = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
         draw = ImageDraw.Draw(bezel)
-        font_small = self._load_font(9)
+        font_small = self._load_font(12)
 
         # Top strip: Wi-Fi + battery
         dot_color = (90, 255, 126) if wifi_connected else (255, 107, 107)
@@ -1441,7 +1335,23 @@ class ImageGenCamController:
         return reduced.resize((WIDTH, HEIGHT), Image.Resampling.BILINEAR)
 
     def _get_modal_background(self) -> Image.Image:
-        return Image.new("RGB", (WIDTH, HEIGHT), (18, 18, 18))
+        now = time.monotonic()
+        if (
+            self.modal_background_image is not None
+            and (now - getattr(self, "modal_background_built_at", 0.0)) < 1.0
+        ):
+            return self.modal_background_image.copy()
+        with self.latest_frame_lock:
+            base = self.latest_display_frame.copy() if self.latest_display_frame else None
+        if base is None:
+            return Image.new("RGB", (WIDTH, HEIGHT), (230, 234, 238))
+        blurred = self._fast_blur(base, 10.0).convert("RGBA")
+        softened = Image.alpha_composite(
+            blurred, Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 118)),
+        ).convert("RGB")
+        self.modal_background_image = softened
+        self.modal_background_built_at = now
+        return softened.copy()
 
     def _draw_chip(
         self,
@@ -1464,7 +1374,7 @@ class ImageGenCamController:
         if badge:
             badge_box = (box[2] - 18, box[1] - 6, box[2] + 6, box[1] + 18)
             draw.rounded_rectangle(badge_box, radius=8, fill=(255, 193, 7))
-            badge_font = self._load_font(8)
+            badge_font = self._load_font(10)
             badge_text = self._truncate_text_pixels(badge, badge_font, 18)
             badge_width = draw.textlength(badge_text, font=badge_font)
             draw.text(
@@ -1497,12 +1407,14 @@ class ImageGenCamController:
         )
 
     def _draw_album_sparkle(self, draw: ImageDraw.ImageDraw, center_x: int, center_y: int) -> None:
+        phase = time.monotonic() * 5.0
+        radius = 4 + int(((math.sin(phase) + 1.0) / 2.0) * 3.0)
         self._draw_sparkle_icon(
             draw,
             center_x,
             center_y,
             color=(255, 238, 130),
-            radius=5,
+            radius=radius,
         )
 
     def _apply_glass_panel(
@@ -1747,39 +1659,30 @@ class ImageGenCamController:
         screen = self._draw_side_tab(screen, icon="check", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
         screen = self._draw_scroll_hints(screen)
-        item_font = self._load_font(11)
+        item_font = self._load_font(14)
         visible_count = 4
         total_prompts = len(self.prompt_order)
         window_start = max(0, self.prompt_picker_index - 1)
         max_start = max(0, total_prompts - visible_count)
         window_start = min(window_start, max_start)
         visible_prompt_ids = self.prompt_order[window_start : window_start + visible_count]
-
-        left_margin = 58
-        right_margin = 20
-        box_x0 = left_margin
-        box_x1 = WIDTH - right_margin
-
-        item_height = 30
-        item_gap = 6
-        row_height = item_height + item_gap
-        block_height = visible_count * item_height + (visible_count - 1) * item_gap
-
-        top_bound = SIDE_CONTROL_TOP_Y
-        bottom_bound = SIDE_CONTROL_BOTTOM_Y + 32
-        y = top_bound + (bottom_bound - top_bound - block_height) // 2
-
-        draw = ImageDraw.Draw(screen)
+        y = 28
         for absolute_index, button in enumerate(visible_prompt_ids, start=window_start):
             entry = self.prompt_entries[button]
-            box = (box_x0, y, box_x1, y + item_height)
+            box = (54, y, WIDTH - 56, y + 38)
             active = absolute_index == self.prompt_picker_index
-            fill = (255, 255, 255) if active else (60, 60, 60)
-            text_color = (0, 0, 0) if active else (255, 255, 255)
-            draw.rounded_rectangle(box, radius=10, fill=fill, outline=(255, 255, 255))
-            label = self._truncate_text_pixels(entry["title"], item_font, box[2] - box[0] - 18)
-            draw.text((box[0] + 10, box[1] + 7), label, font=item_font, fill=text_color)
-            y += row_height
+            fill = (255, 255, 255, 228) if active else (255, 255, 255, 154)
+            screen = self._apply_glass_panel(
+                screen,
+                box,
+                radius=12,
+                fill=fill,
+                outline=(255, 255, 255, 232),
+            )
+            draw = ImageDraw.Draw(screen)
+            label = self._truncate_text_pixels(entry["title"], item_font, box[2] - box[0] - 24)
+            draw.text((box[0] + 12, box[1] + 10), label, font=item_font, fill=(0, 0, 0))
+            y += 44
 
         self._render_to_display(screen.convert("RGB"))
 
@@ -1847,8 +1750,6 @@ class ImageGenCamController:
         try:
             with Image.open(path) as source:
                 fitted = self._fit_generated_for_display(source.convert("RGB"))
-                if self.preview_calibration_lut is not None:
-                    fitted = self._apply_preview_calibration(fitted)
         except Exception:
             logger.exception("Failed to load album image %s", path)
             self.gallery_paths = [candidate for candidate in self.gallery_paths if candidate != path]
@@ -1987,8 +1888,6 @@ class ImageGenCamController:
         try:
             with Image.open(source_path) as source:
                 fitted = self._fit_generated_for_display(source.convert("RGB"))
-                if self.preview_calibration_lut is not None:
-                    fitted = self._apply_preview_calibration(fitted)
         except Exception:
             logger.exception("Failed to load album source image %s", source_path)
             return None
@@ -2079,20 +1978,11 @@ class ImageGenCamController:
 
     def _get_wifi_connected_cached(self) -> bool:
         now = time.monotonic()
-        if now - self.wifi_last_checked_at >= 5.0 and not getattr(self, "_wifi_check_in_progress", False):
+        if now - self.wifi_last_checked_at >= 5.0:
             self.wifi_last_checked_at = now
-            self._wifi_check_in_progress = True
-
-            def worker() -> None:
-                try:
-                    ssid = self._get_wifi_ssid()
-                    self.wifi_connected_cache = bool(ssid and ssid != "Unknown")
-                finally:
-                    self._wifi_check_in_progress = False
-
-            Thread(target=worker, daemon=True).start()
+            self.wifi_connected_cache = bool(self._get_wifi_ssid())
         return self.wifi_connected_cache
-        
+    
     def _get_mac_address(self) -> str:
         for interface in ("wlan0", "eth0"):
             address_path = Path("/sys/class/net") / interface / "address"
@@ -2128,74 +2018,64 @@ class ImageGenCamController:
         self.cpu_last_read_at = now
         return self.cpu_usage_percent
 
-    def _get_web_app_qr_image(self, size: int = 92) -> tuple[Image.Image, str]:
+    def _get_web_app_qr_image(self) -> tuple[Image.Image, str]:
         url = f"{self._get_local_base_url()}/"
-        cache_key = (url, size)
-        if getattr(self, "web_app_qr_cache_key", None) == cache_key and self.web_app_qr_image is not None:
+        if self.web_app_qr_image is not None and self.web_app_qr_url == url:
             return self.web_app_qr_image.copy(), url
 
         qr = qrcode.QRCode(border=1, box_size=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(url)
         qr.make(fit=True)
         qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        inner = size - 10
-        qr_image = ImageOps.contain(qr_image, (inner, inner), Image.Resampling.NEAREST)
-        panel = Image.new("RGB", (size, size), (255, 255, 255))
-        panel.paste(qr_image, ((size - qr_image.width) // 2, (size - qr_image.height) // 2))
-
+        qr_image = ImageOps.contain(qr_image, (92, 92), Image.Resampling.NEAREST)
+        panel = Image.new("RGB", (104, 104), (255, 255, 255))
+        panel.paste(qr_image, ((104 - qr_image.width) // 2, (104 - qr_image.height) // 2))
         self.web_app_qr_image = panel
-        self.web_app_qr_cache_key = cache_key
+        self.web_app_qr_url = url
         return panel.copy(), url
-
 
     def _render_diagnostics_frame(self) -> None:
         screen = self._get_modal_background().convert("RGBA")
         screen = self._draw_side_tab(screen, label="Wi-Fi", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
         screen = self._draw_side_tab(screen, label="INFO", y=SIDE_CONTROL_TOP_Y, side="right")
-
-        panel_box = (78, 16, WIDTH - 18, HEIGHT - 16)  # (78, 16, 254, 224)
         screen = self._apply_glass_panel(
-            screen, panel_box, radius=18,
-            fill=(255, 255, 255, 235), outline=(255, 255, 255, 245),
+            screen,
+            (76, 16, WIDTH - 18, HEIGHT - 16),
+            radius=18,
+            fill=(255, 255, 255, 192),
+            outline=(255, 255, 255, 236),
         )
         draw = ImageDraw.Draw(screen)
-
-        title_font = self._load_font(16)
-        label_font = self._load_font(10)
-        value_font = self._load_font(12)
-        note_font = self._load_font(9)
-
-        panel_x0, _, panel_x1, panel_y1 = panel_box
-        content_x0 = panel_x0 + 12   # 90
-        content_x1 = panel_x1 - 12   # 242
-        content_width = content_x1 - content_x0  # 152
-
-        draw.text((content_x0, 26), "Phone app", font=title_font, fill=(18, 18, 18))
+        title_font = self._load_font(15)
+        body_font = self._load_font(12)
+        value_font = self._load_font(11)
+        meta_font = self._load_font(9)
+        note_font = self._load_font(8)
+        content_x = 88
+        draw.text((content_x, 28), "Phone app", font=title_font, fill=(18, 18, 18))
 
         ssid = self._get_wifi_ssid()
         short_url = self._get_short_app_url().replace("http://", "")
+        draw.text((content_x, 62), "Wi-Fi", font=body_font, fill=(18, 18, 18))
+        draw.text(
+            (content_x, 82),
+            self._truncate_text_pixels(ssid, value_font, 90),
+            font=value_font,
+            fill=(18, 18, 18),
+        )
+        draw.text((content_x, 116), "Open", font=body_font, fill=(18, 18, 18))
+        for index, line in enumerate(self._wrap_text_pixels(short_url, meta_font, 90)[:3]):
+            draw.text((content_x, 136 + index * 14), line, font=meta_font, fill=(18, 18, 18))
+        note = "Note: your phone and camera must be on the same Wi-Fi network or mobile hotspot."
+        for index, line in enumerate(self._wrap_text_pixels(note, note_font, 206)[:3]):
+            draw.text((content_x, 176 + index * 12), line, font=note_font, fill=(60, 60, 60))
+        draw.text((content_x, 214), "top-left: Wi-Fi / top-right: info", font=meta_font, fill=(60, 60, 60))
 
-        draw.text((content_x0, 48), "NETWORK", font=label_font, fill=(120, 120, 120))
-        draw.text((content_x0, 60), self._truncate_text_pixels(ssid, value_font, content_width),
-                font=value_font, fill=(18, 18, 18))
-
-        draw.text((content_x0, 80), "OPEN ON PHONE", font=label_font, fill=(120, 120, 120))
-        url_lines = self._wrap_text_pixels(short_url, value_font, content_width)[:2]
-        for index, line in enumerate(url_lines):
-            draw.text((content_x0, 92 + index * 15), line, font=value_font, fill=(18, 18, 18))
-
-        qr_panel, _url = self._get_web_app_qr_image(size=86)
-        qr_x = content_x0 + (content_width - qr_panel.width) // 2
-        qr_y = 92 + len(url_lines) * 15 + 8
+        qr_panel, _url = self._get_web_app_qr_image()
+        qr_x = WIDTH - qr_panel.width - 30
+        qr_y = 66
         screen.paste(qr_panel, (qr_x, qr_y))
-
-        note_y = qr_y + qr_panel.height + 8
-        note = "Same Wi-Fi or hotspot required"
-        draw.text((content_x0, min(note_y, panel_y1 - 22)),
-                self._truncate_text_pixels(note, note_font, content_width),
-                font=note_font, fill=(90, 90, 90))
-
         self._render_to_display(screen.convert("RGB"))
 
     def _render_diagnostics_detail_frame(self) -> None:
@@ -2406,17 +2286,22 @@ class ImageGenCamController:
 
     def _render_wifi_connecting_frame(self) -> None:
         screen = self._get_modal_background().convert("RGBA")
-        box = (24, 30, WIDTH - 24, HEIGHT - 30)
+        screen = self._apply_glass_panel(
+            screen,
+            (54, 44, WIDTH - 54, HEIGHT - 44),
+            radius=18,
+            fill=(255, 255, 255, 205),
+            outline=(255, 255, 255, 236),
+        )
         draw = ImageDraw.Draw(screen)
-        draw.rounded_rectangle(box, radius=14, fill=(30, 30, 30, 255), outline=(90, 90, 90, 255), width=1)
-        title_font = self._load_font(14)
-        body_font = self._load_font(10)
-        draw.text((44, 60), "Trying Wi-Fi...", font=title_font, fill=(255, 255, 255))
+        title_font = self._load_font(16)
+        body_font = self._load_font(12)
+        draw.text((82, 82), "Trying Wi-Fi...", font=title_font, fill=(18, 18, 18))
         draw.text(
-            (44, 84),
-            self._truncate_text_pixels(self.wifi_connect_message or "Rollback is armed.", body_font, 150),
+            (82, 112),
+            self._truncate_text_pixels(self.wifi_connect_message or "Rollback is armed.", body_font, 160),
             font=body_font,
-            fill=(200, 200, 200),
+            fill=(60, 60, 60),
         )
         self._render_to_display(screen.convert("RGB"))
 
@@ -2424,19 +2309,24 @@ class ImageGenCamController:
         screen = self._get_modal_background().convert("RGBA")
         screen = self._draw_side_tab(screen, label="KEEP", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, label="UNDO", y=SIDE_CONTROL_BOTTOM_Y, side="left")
-        box = (24, 26, WIDTH - 20, HEIGHT - 26)
+        screen = self._apply_glass_panel(
+            screen,
+            (54, 36, WIDTH - 46, HEIGHT - 36),
+            radius=18,
+            fill=(255, 255, 255, 205),
+            outline=(255, 255, 255, 236),
+        )
         draw = ImageDraw.Draw(screen)
-        draw.rounded_rectangle(box, radius=14, fill=(30, 30, 30, 255), outline=(90, 90, 90, 255), width=1)
-        title_font = self._load_font(14)
-        body_font = self._load_font(10)
-        meta_font = self._load_font(8)
+        title_font = self._load_font(16)
+        body_font = self._load_font(12)
+        meta_font = self._load_font(10)
         seconds_left = 0
         if self.wifi_pending_rollback:
             seconds_left = max(0, int(self.wifi_pending_rollback.expires_at - time.monotonic()))
-        draw.text((40, 46), "Wi-Fi changed", font=title_font, fill=(255, 255, 255))
-        draw.text((40, 70), self._truncate_text_pixels(self._get_wifi_ssid(), body_font, 150), font=body_font, fill=(255, 255, 255))
-        draw.text((40, 90), "Press KEEP if this works.", font=body_font, fill=(200, 200, 200))
-        draw.text((40, 108), f"Auto-rollback in {seconds_left}s", font=meta_font, fill=(200, 200, 200))
+        draw.text((78, 62), "Wi-Fi changed", font=title_font, fill=(18, 18, 18))
+        draw.text((78, 94), self._truncate_text_pixels(self._get_wifi_ssid(), body_font, 170), font=body_font, fill=(18, 18, 18))
+        draw.text((78, 122), "Press KEEP if this works.", font=body_font, fill=(60, 60, 60))
+        draw.text((78, 144), f"Auto-rollback in {seconds_left}s", font=meta_font, fill=(60, 60, 60))
         self._render_to_display(screen.convert("RGB"))
 
     def _build_current_album_download_url(self) -> str | None:
@@ -2464,9 +2354,9 @@ class ImageGenCamController:
         qr.add_data(url)
         qr.make(fit=True)
         qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        qr_image = ImageOps.contain(qr_image, (110, 110), Image.Resampling.NEAREST)
-        panel = Image.new("RGB", (120, 120), (255, 255, 255))
-        panel.paste(qr_image, ((120 - qr_image.width) // 2, (120 - qr_image.height) // 2))
+        qr_image = ImageOps.contain(qr_image, (136, 136), Image.Resampling.NEAREST)
+        panel = Image.new("RGB", (148, 148), (255, 255, 255))
+        panel.paste(qr_image, ((148 - qr_image.width) // 2, (148 - qr_image.height) // 2))
 
         self.album_qr_cached_path = path
         self.album_qr_cached_url = url
@@ -2485,18 +2375,20 @@ class ImageGenCamController:
             screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
             screen = self._draw_scroll_hints(screen)
             draw = ImageDraw.Draw(screen)
-            title_font = self._load_font(17)
-            body_font = self._load_font(11)
+            title_font = self._load_font(22)
+            body_font = self._load_font(14)
             if self.gallery_paths and self.album_show_source:
-                draw.text((56, 60), "No Source Found", font=title_font, fill=(18, 18, 18))
-                draw.text((56, 84), "Press shutter to go back.", font=body_font, fill=(18, 18, 18))
+                draw.text((76, 82), "No Source Found", font=title_font, fill=(18, 18, 18))
+                draw.text((76, 110), "Press shutter to go back.", font=body_font, fill=(18, 18, 18))
             else:
-                draw.text((64, 60), "Album Empty", font=title_font, fill=(18, 18, 18))
-                draw.text((64, 84), "Take a photo to add one.", font=body_font, fill=(18, 18, 18))
+                draw.text((86, 82), "Album Empty", font=title_font, fill=(18, 18, 18))
+                draw.text((86, 110), "Take a photo to add one.", font=body_font, fill=(18, 18, 18))
             self._render_to_display(screen.convert("RGB"))
             return
 
         screen = image.convert("RGBA")
+        overlay = Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 38))
+        screen = Image.alpha_composite(screen, overlay)
         screen = self._draw_side_tab(screen, icon="download", y=SIDE_CONTROL_TOP_Y, side="left", active=True)
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
         screen = self._draw_scroll_hints(screen)
@@ -2509,11 +2401,25 @@ class ImageGenCamController:
             self._render_album_frame()
             return
 
-        screen = self._get_modal_background().convert("RGBA")
+        base = self._get_album_display_image()
+        if base is None:
+            screen = self._get_modal_background().convert("RGBA")
+        else:
+            screen = self._fast_blur(base, 10.0).convert("RGBA")
+            screen = Image.alpha_composite(
+                screen,
+                Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255, 108)),
+            )
+
         screen = self._draw_side_tab(screen, icon="back", y=SIDE_CONTROL_BOTTOM_Y, side="left")
-        panel_box = (30, 20, WIDTH - 30, HEIGHT - 20)
-        draw = ImageDraw.Draw(screen)
-        draw.rounded_rectangle(panel_box, radius=14, fill=(240, 240, 240, 255), outline=(200, 200, 200, 255), width=1)
+        screen = self._apply_glass_panel(
+            screen,
+            (58, 18, WIDTH - 58, HEIGHT - 18),
+            radius=18,
+            fill=(255, 255, 255, 196),
+            outline=(255, 255, 255, 236),
+        )
+        panel_box = (58, 18, WIDTH - 58, HEIGHT - 18)
         qr_x = panel_box[0] + ((panel_box[2] - panel_box[0]) - qr_panel.width) // 2
         qr_y = panel_box[1] + ((panel_box[3] - panel_box[1]) - qr_panel.height) // 2
         screen.paste(qr_panel, (qr_x, qr_y))
@@ -2642,7 +2548,7 @@ class ImageGenCamController:
 
         with self.latest_frame_lock:
             display_frame = self.latest_display_frame.copy() if self.latest_display_frame else None
-            source_frame = self._capture_high_res_still()
+            source_frame = self.latest_preview_frame.copy() if self.latest_preview_frame else None
 
         if display_frame is None or source_frame is None:
             with self.state_lock:
@@ -2678,7 +2584,7 @@ class ImageGenCamController:
 
         with self.latest_frame_lock:
             display_frame = self.latest_display_frame.copy() if self.latest_display_frame else None
-            source_frame = self._capture_high_res_still()
+            source_frame = self.latest_preview_frame.copy() if self.latest_preview_frame else None
 
         if display_frame is None or source_frame is None:
             with self.state_lock:
@@ -2724,7 +2630,7 @@ class ImageGenCamController:
 
         with self.latest_frame_lock:
             display_frame = self.latest_display_frame.copy() if self.latest_display_frame else None
-            source_frame = self._capture_high_res_still()
+            source_frame = self.latest_preview_frame.copy() if self.latest_preview_frame else None
 
         if display_frame is None or source_frame is None:
             with self.state_lock:
@@ -2750,47 +2656,6 @@ class ImageGenCamController:
             self.state.last_error = None
             self.state.pending_jobs += 1
             self.state.status_message = f"{prompt_entry['title']} queued"
-        self.preview_overlay_dirty = True
-
-    def _enqueue_album_magic_restyle(self) -> None:
-        generated_path = self._current_album_path()
-        if generated_path is None:
-            return
-        source_path = self._find_capture_for_generated(generated_path)
-        if source_path is None:
-            with self.state_lock:
-                self.state.status_message = "Original photo not found."
-            return
-
-        metadata = self._read_generation_metadata(generated_path)
-        original_button = str(metadata.get("prompt_button") or "") or None
-        style = self._pick_random_style_prompt(exclude_button=original_button)
-
-        with self.state_lock:
-            pending_jobs = self.state.pending_jobs
-        if self.max_pending_generations and pending_jobs >= self.max_pending_generations:
-            with self.state_lock:
-                self.state.status_message = "Queue full. Wait for album."
-            return
-
-        new_generated_path = self._save_generated_path(style["id"])
-        job = GenerationJob(
-            prompt_button=style["id"],
-            prompt_title=style["title"],
-            prompt_body=style["body"],
-            capture_path=source_path,
-            generated_path=new_generated_path,
-        )
-        with self.state_lock:
-            self.state.last_error = None
-            self.state.pending_jobs += 1
-            self.state.status_message = f"Restyling with {style['title']}..."
-        self._save_generation_job(job)
-
-        stale = self._get_album_display_image() or self._get_album_source_display_image()
-        self._prepare_capture_feedback(stale)
-        with self.state_lock:
-            self.state.mode = "capture_feedback"
         self.preview_overlay_dirty = True
 
     def _capture_worker_loop(self) -> None:
@@ -3179,8 +3044,16 @@ class ImageGenCamController:
         self._start_wifi_connection(self.wifi_selected_network, self.wifi_password)
 
     def _maybe_trigger_diagnostics(self, event: str, mode: str) -> bool:
-        if mode != "preview" or event != "diagnostics_hold":
+        if mode != "preview" or event != "ui_up":
             return False
+        now = time.monotonic()
+        self.diagnostics_tap_times = [
+            stamp for stamp in self.diagnostics_tap_times if (now - stamp) < 1.2
+        ]
+        self.diagnostics_tap_times.append(now)
+        if len(self.diagnostics_tap_times) < 3:
+            return False
+        self.diagnostics_tap_times.clear()
         self._enter_diagnostics()
         return True
 
@@ -3215,11 +3088,6 @@ class ImageGenCamController:
 
     def _handle_event(self, event: str) -> None:
         mode = self.get_status_snapshot()["mode"]
-        
-        if event == "magic_restyle":
-            if mode == "album":
-                self._enqueue_album_magic_restyle()
-            return
 
         if event == "magic_shutter":
             if mode in {"preview", "capture_feedback"}:
@@ -3353,22 +3221,6 @@ class ImageGenCamController:
                 if self.camera_failure is not None:
                     raise RuntimeError(self.camera_failure)
                 self._check_stale_camera(now)
-                idle_for = now - self.last_activity_at
-                if idle_for > IDLE_BLANK_TIMEOUT_SECONDS and self.state.mode == "preview":
-                    if not self.screen_blanked:
-                        self._render_to_display(Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), decorate_battery=False)
-                        with self.camera_access_lock:
-                            self.camera_paused = True
-                            self.picam2.stop()
-                        self.screen_blanked = True
-                    time.sleep(0.2)
-                    continue
-                elif self.screen_blanked:
-                    with self.camera_access_lock:
-                        self.picam2.start()
-                        self.camera_paused = False
-                    self.screen_blanked = False
-                    self.last_drawn_mode = None
                 self._maybe_configure_pisugar_button()
 
                 self._poll_buttons()
