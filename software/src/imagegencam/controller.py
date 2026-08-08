@@ -1118,6 +1118,8 @@ class ImageGenCamController:
             self.state.capture_fps = f"{self.capture_fps_ema:.1f}" if self.capture_fps_ema > 0 else "-"
 
     def _check_stale_camera(self, now: float) -> None:
+        if self.camera_paused:
+            return
         if self.capture_last_frame_at is None:
             return
         stale_for = now - self.capture_last_frame_at
@@ -3451,6 +3453,7 @@ class ImageGenCamController:
                     with self.camera_access_lock:
                         self.picam2.start()
                         self.camera_paused = False
+                    self.capture_last_frame_at = time.monotonic()
                     self.screen_blanked = False
                     self.last_drawn_mode = None
                 self._maybe_configure_pisugar_button()
