@@ -264,6 +264,9 @@ class ImageGenCamController:
         self.album_preload_generation = 0
         self.album_cached_path: Path | None = None
         self.album_cached_image: Image.Image | None = None
+        self.album_image_cache: dict[Path, Image.Image] = {}
+        self.album_image_cache_order: list[Path] = []
+        self.album_cache_max_size = 8
         self.album_source_cached_path: Path | None = None
         self.album_source_cached_image: Image.Image | None = None
         self.album_display_stale_image: Image.Image | None = None
@@ -418,7 +421,7 @@ class ImageGenCamController:
         self.preview_camera_config = self.picam2.create_preview_configuration(
             main={"size": self.preview_size, "format": "RGB888"},
             controls={"FrameRate": self.frame_rate},
-            buffer_count=2,
+            buffer_count=4,
         )
         self.still_camera_config = self.picam2.create_still_configuration(
             main={"size": (2592, 1944), "format": "RGB888"},
@@ -1880,9 +1883,12 @@ class ImageGenCamController:
         path = self._current_album_path()
         if path is None:
             return None
-        if self.album_cached_path == path and self.album_cached_image is not None:
-            self.album_display_stale_image = self.album_cached_image
-            return self.album_cached_image.copy()
+        cached = self.album_image_cache.get(path)
+        if cached is not None:
+            self.album_cached_path = path
+            self.album_cached_image = cached
+            self.album_display_stale_image = cached
+            return cached.copy()
 
         self._start_album_display_preload(path)
         if self.album_display_stale_image is not None:
@@ -1904,6 +1910,7 @@ class ImageGenCamController:
                 logger.exception("Failed to preload album image %s", path)
                 self._album_display_loading_path = None
                 return
+            self._store_album_cache(path, fitted)
             if self._current_album_path() != path:
                 self._album_display_loading_path = None
                 return
@@ -2078,6 +2085,15 @@ class ImageGenCamController:
 
         Thread(target=worker, daemon=True).start()
 
+    def _store_album_cache(self, path: Path, image: Image.Image) -> None:
+        self.album_image_cache[path] = image
+        if path in self.album_image_cache_order:
+            self.album_image_cache_order.remove(path)
+        self.album_image_cache_order.append(path)
+        while len(self.album_image_cache_order) > self.album_cache_max_size:
+            oldest = self.album_image_cache_order.pop(0)
+            self.album_image_cache.pop(oldest, None)
+    
     def _invalidate_album_cache(self) -> None:
         self.album_cached_path = None
         self.album_cached_image = None
@@ -3251,10 +3267,22 @@ class ImageGenCamController:
             return
         self.album_index = (self.album_index + delta) % len(self.gallery_paths)
         self.album_show_source = False
-        self._invalidate_album_cache()
         self._preload_album_compare_async()
+        self._prefetch_album_neighbors()
         self.last_drawn_mode = None
 
+    def _prefetch_album_neighbors(self) -> None:
+        if not self.gallery_paths:
+            return
+        total = len(self.gallery_paths)
+        offsets = (1, -1, 2, -2)
+        for offset in offsets:
+            idx = (self.album_index + offset) % total
+            path = self.gallery_paths[idx]
+            if path in self.album_image_cache:
+                continue
+            self._start_album_display_preload(path)
+    
     def _toggle_album_compare(self) -> None:
         if not self.gallery_paths:
             return
