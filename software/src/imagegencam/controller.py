@@ -3439,25 +3439,8 @@ class ImageGenCamController:
                 if self.camera_failure is not None:
                     raise RuntimeError(self.camera_failure)
                 self._check_stale_camera(now)
-                idle_for = now - self.last_activity_at
-                if idle_for > IDLE_BLANK_TIMEOUT_SECONDS and self.state.mode == "preview":
-                    if not self.screen_blanked:
-                        self._render_to_display(Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), decorate_battery=False)
-                        with self.camera_access_lock:
-                            self.camera_paused = True
-                            self.picam2.stop()
-                        self.screen_blanked = True
-                    time.sleep(0.2)
-                    continue
-                elif self.screen_blanked:
-                    with self.camera_access_lock:
-                        self.picam2.start()
-                        self.camera_paused = False
-                    self.capture_last_frame_at = time.monotonic()
-                    self.screen_blanked = False
-                    self.last_drawn_mode = None
-                self._maybe_configure_pisugar_button()
 
+                self._maybe_configure_pisugar_button()
                 self._poll_buttons()
                 self._poll_external_shutter_events()
                 self._poll_pisugar_power_button(now)
@@ -3468,6 +3451,29 @@ class ImageGenCamController:
                         self._handle_event(event)
                 except Empty:
                     pass
+
+                idle_for = now - self.last_activity_at
+
+                if self.screen_blanked:
+                    if idle_for <= IDLE_BLANK_TIMEOUT_SECONDS:
+                        with self.camera_access_lock:
+                            self.picam2.start()
+                            self.camera_paused = False
+                        self.capture_last_frame_at = time.monotonic()
+                        self.screen_blanked = False
+                        self.last_drawn_mode = None
+                    else:
+                        time.sleep(0.2)
+                        continue
+                elif idle_for > IDLE_BLANK_TIMEOUT_SECONDS and self.state.mode == "preview":
+                    self._render_to_display(Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), decorate_battery=False)
+                    with self.camera_access_lock:
+                        self.camera_paused = True
+                        self.picam2.stop()
+                    time.sleep(0.3)
+                    self.screen_blanked = True
+                    time.sleep(0.2)
+                    continue
 
                 snapshot = self.get_status_snapshot()
                 mode = snapshot["mode"]
